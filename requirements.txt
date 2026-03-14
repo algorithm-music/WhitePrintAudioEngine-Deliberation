@@ -1,0 +1,13 @@
+# whiteprint-deliberation: Cross-Vendor 3-Model Consensus Engine
+
+# HTTP client
+httpx>=0.27,<1.0
+
+# API framework
+fastapi>=0.110,<1.0
+uvicorn>=0.29,<1.0
+
+# LLM Providers (3-Vendor TRIVIUM Architecture)
+google-genai>=1.0,<2.0
+openai>=1.0,<3.0
+anthropic>=0.30,<1.0
