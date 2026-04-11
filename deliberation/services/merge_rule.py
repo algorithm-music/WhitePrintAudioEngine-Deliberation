@@ -69,7 +69,7 @@ def arbitrate(
     )
     merge_log.extend(target_log)
 
-    # Risk targets: use upper median (max of weighted median and individual max)
+    # Risk targets: use standard median (consensus, not forced maximum)
     risk_keys = [k for k in merged_targets if "risk" in k or "max_" in k]
     for rk in risk_keys:
         vals = []
@@ -78,15 +78,16 @@ def arbitrate(
             if v is not None and isinstance(v, (int, float)):
                 vals.append(v)
         if vals:
-            upper = max(vals)
-            if merged_targets.get(rk) is not None and upper > merged_targets[rk]:
+            sorted_vals = sorted(vals)
+            median_val = sorted_vals[len(sorted_vals) // 2]
+            if merged_targets.get(rk) is not None and abs(median_val - merged_targets[rk]) > 0.001:
                 merge_log.append({
                     "field": f"whole_track_targets.{rk}",
-                    "rule": "risk_upper_median",
+                    "rule": "risk_median",
                     "original": merged_targets[rk],
-                    "adjusted": upper,
+                    "adjusted": median_val,
                 })
-                merged_targets[rk] = upper
+                merged_targets[rk] = median_val
 
     # Compute deltas
     merged_deltas = {}
@@ -464,10 +465,9 @@ def _check_flattening_veto(opinions: list[dict], merged_targets: dict) -> list[d
                 "type": "lra_flattening_veto",
                 "guard_target": guard_lra,
                 "merged_target": merged_lra,
-                "action": "adjusted_to_guard_minimum",
+                "action": "logged_only",
             })
-            # Apply veto: raise merged LRA to guard's minimum
-            merged_targets["target_lra_lu"] = round(guard_lra * 0.9, 2)
+            # Logged but NOT overwritten — artist's intent preserved
 
     return vetoes
 
@@ -502,12 +502,12 @@ def _check_label_majority(opinions: list[dict]) -> list[dict]:
 
             majority = max(label_counts.values())
             if majority < 2:
-                # No 2/3 majority — contradiction
+                # Multiple perspectives on this section — not a contradiction
                 contradictions.append({
                     "field": f"macro_form.sections.{sid}.label",
-                    "type": "label_disagreement",
+                    "type": "multi_perspective_labels",
                     "positions": labels,
-                    "severity": 0.5 if majority == 1 else 0.3,
+                    "severity": 0.0,
                 })
 
     return contradictions

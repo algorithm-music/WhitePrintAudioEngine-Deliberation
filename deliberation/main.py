@@ -133,7 +133,7 @@ async def deliberate(req: DeliberateRequest) -> JSONResponse:
         logger.error(f"Deliberation failed: {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Deliberation failed: {type(e).__name__}: {e}",
+            detail="Deliberation failed. Check server logs for details.",
         )
 
     return JSONResponse(content=result)
@@ -154,7 +154,7 @@ async def validate_formplan(req: ArbitrateRequest) -> JSONResponse:
         logger.error(f"Arbitration failed: {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Arbitration failed: {type(e).__name__}: {e}",
+            detail="Arbitration failed. Check server logs for details.",
         )
 
     return JSONResponse(content=result)

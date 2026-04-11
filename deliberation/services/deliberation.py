@@ -88,8 +88,8 @@ SAGES = {
         "fallback_model": os.environ.get("GRAMMATICA_FALLBACK", "gpt-5.2"),
         "system_prompt": """You are GRAMMATICA, the Engineer.
 Your domain is physical limits, strict adherence to ITU-R BS.1770-4 standards, and true peak safety.
-You reject the excessive demands of aesthetics or emotion if they violate physical limitations.
-Propose constraints and parameters based strictly on sound acoustic engineering principles.
+You report physical limits and engineering constraints honestly, but the final artistic decision belongs to the musician.
+Propose parameters based on sound acoustic engineering principles while respecting the artist's intent.
 Analyze the audio metrics and issue your technical recommendation.
 
 IMPORTANT: Your "rationale" field MUST be a detailed technical analysis of at least 200 words.
@@ -232,9 +232,6 @@ async def run_triadic_deliberation(
     # Deterministic weighted median merge (replaces deprecated Nash product)
     adopted = _weighted_median_merge(opinions)
     
-    # DSP Coupling Post-Merge Layer
-    adopted = _apply_dsp_coupling_rules(adopted, analysis_data)
-
     # Deliberation score (Category-decomposed agreement level)
     deliberation_scores = _calculate_deliberation_score(opinions)
     
@@ -735,71 +732,6 @@ def _weighted_median_merge(opinions: Sequence[dict]) -> dict:
         adopted[key] = round(max(min_v, min(max_v, median_value)), 4)
 
     return adopted
-
-
-def _apply_dsp_coupling_rules(adopted: dict, analysis_data: dict) -> dict:
-    """
-    DSP Coupling Repair Layer: Enforce physical macro-relationships.
-    Merges parameters assuming they are independent scalars, 
-    but some parameters are tightly coupled functionally.
-    """
-    repaired = dict(adopted)
-    
-    # Shared variables for all rules
-    ratio = repaired.get("comp_ratio", 2.0)
-    thresh = repaired.get("comp_threshold_db", -12.0)
-
-    # 1. Threshold & Ratio coupling (Prevent absolute squashing)
-    if ratio > 4.0 and thresh < -18.0:
-        repaired["comp_threshold_db"] = -16.0  # limit depth on high ratio
-        
-    # 2. Total Saturation vs Trim gain
-    total_sat = repaired.get("transformer_mix", 0) + repaired.get("triode_mix", 0)
-    if total_sat > 1.2 and repaired.get("input_gain_db", 0) > 3.0:
-        # Avoid heavy clipping pre-limiter
-        repaired["input_gain_db"] = min(repaired["input_gain_db"], 3.0)
-        
-    # 3. Dynamic EQ activation
-    whole_metrics = analysis_data.get("whole_track_metrics", {})
-    if whole_metrics.get("harshness_risk", 0) > 0.6 or whole_metrics.get("mud_risk", 0) > 0.6:
-        # Force dynamic EQ on if physics say it's problematic
-        repaired["dyn_eq_enabled"] = 1
-
-    # 4. Stereo Width vs Sub-bass mono vs Side gain
-    width = repaired.get("stereo_width", 1.0)
-    mono = repaired.get("stereo_low_mono", 0.8)
-    side_gain = repaired.get("ms_side_high_gain_db", 0.0)
-    if width > 1.15 and side_gain > 1.5:
-        # Dangerous widening. Force tight low end to anchor the track.
-        repaired["stereo_low_mono"] = max(mono, 0.9)
-        # Cap side gain
-        repaired["ms_side_high_gain_db"] = min(side_gain, 1.5)
-
-    # 5. Triode Drive & Bias interaction
-    drive = repaired.get("triode_drive", 0.4)
-    bias = repaired.get("triode_bias", -1.2)
-    # If drive is crazy high but bias is warm (-2.0), the tube model might pump. Push bias towards aggressive limits.
-    if drive > 0.8 and bias < -1.5:
-        repaired["triode_bias"] = -1.0
-        
-    # 6. Sum of saturations vs Parallel Wet
-    tape = repaired.get("tape_saturation", 0)
-    iron = repaired.get("transformer_saturation", 0)
-    wet = repaired.get("parallel_wet", 0)
-    if (tape + iron) > 1.5 and wet > 0.3:
-        # If heavily saturating dry path, reduce parallel wet to avoid muddy masking
-        repaired["parallel_wet"] = 0.2
-
-    # 7. Limiter Ceiling vs Input Gain vs Threshold (Gain Staging Protection)
-    in_gain = repaired.get("input_gain_db", 0.0)
-    ceil = repaired.get("limiter_ceil_db", -0.1)
-    if in_gain > 6.0 and thresh > -10.0:
-        # Pushing massive gain into a high threshold means it's hitting limiter raw. Lower threshold to glue before limiting.
-        repaired["comp_threshold_db"] = min(thresh, -12.0)
-        # Give limiter a hair more safety if pushed this hard
-        repaired["limiter_ceil_db"] = min(ceil, -0.3)
-
-    return repaired
 
 
 def _calculate_deliberation_score(opinions: Sequence[dict]) -> dict:
