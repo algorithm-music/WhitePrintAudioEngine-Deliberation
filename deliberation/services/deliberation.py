@@ -34,35 +34,47 @@ logger = logging.getLogger("deliberation.deliberation")
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "aidriven-mastering-fyqu")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "asia-northeast1")
 
-# Cached clients (one per provider)
-_openai_client: openai.OpenAI | None = None
-_anthropic_client: anthropic.Anthropic | None = None
-_google_client: genai.Client | None = None
+# ──────────────────────────────────────────
+# Multi-key client pool (fallback across API keys)
+# ──────────────────────────────────────────
+def _get_env_keys(prefix: str) -> list[str]:
+    """Collect API keys from env: PREFIX, PREFIX_2, PREFIX_3, ..."""
+    keys: list[str] = []
+    primary = os.environ.get(prefix)
+    if primary:
+        keys.append(primary)
+    for i in range(2, 10):
+        k = os.environ.get(f"{prefix}_{i}")
+        if k:
+            keys.append(k)
+    return keys
 
+_openai_keys: list[str] = []
+_anthropic_keys: list[str] = []
+_google_keys: list[str] = []
 
-def _get_openai_client() -> openai.OpenAI:
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-    return _openai_client
+def _init_key_pools():
+    global _openai_keys, _anthropic_keys, _google_keys
+    _openai_keys = _get_env_keys("OPENAI_API_KEY")
+    _anthropic_keys = _get_env_keys("ANTHROPIC_API_KEY")
+    _google_keys = _get_env_keys("GOOGLE_API_KEY")
+    logger.info(f"Key pools: OpenAI={len(_openai_keys)}, Anthropic={len(_anthropic_keys)}, Google={len(_google_keys)}")
 
+# Initialize on module load
+_init_key_pools()
 
-def _get_anthropic_client() -> anthropic.Anthropic:
-    global _anthropic_client
-    if _anthropic_client is None:
-        _anthropic_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    return _anthropic_client
+def _get_openai_client(key_index: int = 0) -> openai.OpenAI:
+    key = _openai_keys[key_index] if key_index < len(_openai_keys) else None
+    return openai.OpenAI(api_key=key)
 
+def _get_anthropic_client(key_index: int = 0) -> anthropic.Anthropic:
+    key = _anthropic_keys[key_index] if key_index < len(_anthropic_keys) else None
+    return anthropic.Anthropic(api_key=key)
 
-def _get_google_client() -> genai.Client:
-    global _google_client
-    if _google_client is None:
-        api_key = os.environ.get("GOOGLE_API_KEY")
-        if api_key:
-            _google_client = genai.Client(api_key=api_key)
-        else:
-            _google_client = genai.Client(project=GCP_PROJECT_ID, location=GCP_LOCATION)
-    return _google_client
+def _get_google_client(key_index: int = 0) -> genai.Client:
+    if key_index < len(_google_keys):
+        return genai.Client(api_key=_google_keys[key_index])
+    return genai.Client(project=GCP_PROJECT_ID, location=GCP_LOCATION)
 
 
 # ──────────────────────────────────────────
@@ -435,112 +447,115 @@ def _robust_json_parse(text: str) -> dict:
     return {"parsed": {}, "status": "failed", "raw": text}
 
 async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
-    """Query an LLM agent via its configured provider. Tracks latency, parse status, errors, and tokens."""
+    """Query an LLM agent via its configured provider.
+
+    Retry strategy: for each API key in the pool, try primary model then fallback model.
+    This gives maximum resilience against rate limits, expired keys, or quota exhaustion.
+    """
     provider = persona.get("provider", "google")
     primary_model = persona.get("model", "gemini-3.1-pro-preview")
     fallback_model = persona.get("fallback_model")
-    
+
+    # Determine how many API keys are available for this provider
+    key_pool_size = max(1, len(
+        _openai_keys if provider == "openai"
+        else _anthropic_keys if provider == "anthropic"
+        else _google_keys
+    ))
+
     errors = []
     token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-    for attempt, model in enumerate([primary_model, fallback_model]):
-        if model is None:
-            continue
-        try:
-            call_start = time.time()
-            if provider == "openai":
-                text, usage = await _call_openai(model, persona["system_prompt"], prompt)
-            elif provider == "anthropic":
-                text, usage = await _call_anthropic(model, persona["system_prompt"], prompt)
-            else:
-                text, usage = await _call_google(model, persona["system_prompt"], prompt)
-            latency_ms = int((time.time() - call_start) * 1000)
-            token_usage = usage
-
-            parse_result = _robust_json_parse(text)
-            params = parse_result["parsed"]
-            parse_status = parse_result["status"]
-            
-            if parse_status == "repaired":
-                errors.append({
-                    "agent": agent_key,
-                    "provider": provider,
-                    "model": model,
-                    "stage": "json_parse",
-                    "message": "Malformed JSON repaired via regex/bracket extraction",
-                    "severity": "warning"
-                })
-            elif parse_status == "failed":
-                errors.append({
-                    "agent": agent_key,
-                    "provider": provider,
-                    "model": model,
-                    "stage": "json_parse",
-                    "message": "Complete JSON parse failure. Defaulting values.",
-                    "severity": "error"
-                })
-
-            clamped = {}
-            valid_count = 0
-            for key, schema in PARAMETER_SCHEMA.items():
-                if key in params:
-                    value = params[key]
-                    try:
-                        val_f = float(value)
-                        if math.isnan(val_f) or math.isinf(val_f):
-                            val_f = schema["default"]
-                        else:
-                            valid_count += 1
-                    except (ValueError, TypeError):
-                        val_f = schema["default"]
-                    clamped[key] = max(schema["min"], min(schema["max"], val_f))
+    for key_idx in range(key_pool_size):
+        for attempt, model in enumerate([primary_model, fallback_model]):
+            if model is None:
+                continue
+            try:
+                call_start = time.time()
+                if provider == "openai":
+                    text, usage = await _call_openai(model, persona["system_prompt"], prompt, key_idx)
+                elif provider == "anthropic":
+                    text, usage = await _call_anthropic(model, persona["system_prompt"], prompt, key_idx)
                 else:
-                    clamped[key] = schema["default"]
+                    text, usage = await _call_google(model, persona["system_prompt"], prompt, key_idx)
+                latency_ms = int((time.time() - call_start) * 1000)
+                token_usage = usage
 
-            is_fallback = attempt > 0
-            if is_fallback:
-                msg = f"Agent {agent_key}: primary {primary_model} failed, succeeded with fallback {model}"
-                logger.warning(msg)
+                parse_result = _robust_json_parse(text)
+                params = parse_result["parsed"]
+                parse_status = parse_result["status"]
+
+                if parse_status == "repaired":
+                    errors.append({
+                        "agent": agent_key, "provider": provider, "model": model,
+                        "stage": "json_parse",
+                        "message": "Malformed JSON repaired via regex/bracket extraction",
+                        "severity": "warning"
+                    })
+                elif parse_status == "failed":
+                    errors.append({
+                        "agent": agent_key, "provider": provider, "model": model,
+                        "stage": "json_parse",
+                        "message": "Complete JSON parse failure. Defaulting values.",
+                        "severity": "error"
+                    })
+
+                clamped = {}
+                valid_count = 0
+                for key, schema in PARAMETER_SCHEMA.items():
+                    if key in params:
+                        value = params[key]
+                        try:
+                            val_f = float(value)
+                            if math.isnan(val_f) or math.isinf(val_f):
+                                val_f = schema["default"]
+                            else:
+                                valid_count += 1
+                        except (ValueError, TypeError):
+                            val_f = schema["default"]
+                        clamped[key] = max(schema["min"], min(schema["max"], val_f))
+                    else:
+                        clamped[key] = schema["default"]
+
+                is_fallback = attempt > 0 or key_idx > 0
+                if is_fallback:
+                    msg = f"Agent {agent_key}: succeeded with key[{key_idx}]/{model}"
+                    logger.warning(msg)
+                    errors.append({
+                        "agent": agent_key, "provider": provider, "model": model,
+                        "stage": "fallback", "message": msg, "severity": "warning"
+                    })
+
+                valid_ratio = valid_count / len(PARAMETER_SCHEMA) if PARAMETER_SCHEMA else 1.0
+                raw_confidence = float(params.get("confidence", 0.7))
+
+                return {
+                    "agent_name": agent_key,
+                    "provider": provider,
+                    "model": model,
+                    "is_fallback": is_fallback,
+                    "latency_ms": latency_ms,
+                    "parse_status": parse_status,
+                    "raw_response_size": len(text),
+                    "confidence": min(1.0, max(0.0, raw_confidence)),
+                    "valid_param_ratio": valid_ratio,
+                    **clamped,
+                    "rationale": params.get("rationale", f"Agent {agent_key} analysis"),
+                    "section_overrides": params.get("section_overrides", []),
+                    "errors": errors,
+                    "token_usage": token_usage
+                }
+
+            except Exception as e:
+                msg = str(e)
+                is_last = (key_idx == key_pool_size - 1) and (attempt > 0 or fallback_model is None)
+                severity = "error" if is_last else "warning"
                 errors.append({
                     "agent": agent_key, "provider": provider, "model": model,
-                    "stage": "fallback", "message": msg, "severity": "warning"
+                    "stage": "api_call", "message": f"key[{key_idx}] {msg}",
+                    "severity": severity
                 })
-
-            valid_ratio = valid_count / len(PARAMETER_SCHEMA) if PARAMETER_SCHEMA else 1.0
-            raw_confidence = float(params.get("confidence", 0.7))
-
-            return {
-                "agent_name": agent_key,
-                "provider": provider,
-                "model": model,
-                "is_fallback": is_fallback,
-                "latency_ms": latency_ms,
-                "parse_status": parse_status,
-                "raw_response_size": len(text),
-                "confidence": min(1.0, max(0.0, raw_confidence)),
-                "valid_param_ratio": valid_ratio,
-                **clamped,
-                "rationale": params.get("rationale", f"Agent {agent_key} analysis"),
-                "section_overrides": params.get("section_overrides", []),
-                "errors": errors,
-                "token_usage": token_usage
-            }
-
-        except Exception as e:
-            msg = str(e)
-            severity = "warning" if attempt == 0 and fallback_model else "error"
-            errors.append({
-                "agent": agent_key,
-                "provider": provider,
-                "model": model,
-                "stage": "api_call",
-                "message": msg,
-                "severity": severity
-            })
-            if attempt == 0 and fallback_model:
-                logger.warning(f"Agent {agent_key} primary ({provider}/{model}) failed: {e}. Trying fallback...")
-            else:
-                logger.error(f"Agent {agent_key} ({provider}/{model}) failed: {e}")
+                logger.warning(f"Agent {agent_key} key[{key_idx}]/{model} failed: {e}")
 
     default_op = _default_opinion(agent_key)
     default_op["errors"] = errors
@@ -548,9 +563,9 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
     return default_op
 
 
-async def _call_openai(model: str, system_prompt: str, user_prompt: str) -> tuple[str, dict]:
+async def _call_openai(model: str, system_prompt: str, user_prompt: str, key_index: int = 0) -> tuple[str, dict]:
     """Call OpenAI API and return raw JSON text, along with token usage."""
-    client = _get_openai_client()
+    client = _get_openai_client(key_index)
 
     def _sync_call():
         response = client.chat.completions.create(
@@ -572,9 +587,9 @@ async def _call_openai(model: str, system_prompt: str, user_prompt: str) -> tupl
     return await asyncio.to_thread(_sync_call)
 
 
-async def _call_anthropic(model: str, system_prompt: str, user_prompt: str) -> tuple[str, dict]:
+async def _call_anthropic(model: str, system_prompt: str, user_prompt: str, key_index: int = 0) -> tuple[str, dict]:
     """Call Anthropic API and return raw JSON text, along with token usage."""
-    client = _get_anthropic_client()
+    client = _get_anthropic_client(key_index)
 
     def _sync_call():
         response = client.messages.create(
@@ -596,18 +611,22 @@ async def _call_anthropic(model: str, system_prompt: str, user_prompt: str) -> t
     return await asyncio.to_thread(_sync_call)
 
 
-async def _call_google(model: str, system_prompt: str, user_prompt: str) -> tuple[str, dict]:
+async def _call_google(model: str, system_prompt: str, user_prompt: str, key_index: int = 0) -> tuple[str, dict]:
     """Call Google Gemini API and return raw JSON text, along with token usage."""
-    client = _get_google_client()
-    response = client.models.generate_content(
-        model=model,
-        contents=[user_prompt],
-        config=genai.types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            response_mime_type="application/json",
-            temperature=0.3,
-        ),
-    )
+    client = _get_google_client(key_index)
+
+    def _sync_call():
+        return client.models.generate_content(
+            model=model,
+            contents=[user_prompt],
+            config=genai.types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                response_mime_type="application/json",
+                temperature=0.3,
+            ),
+        )
+
+    response = await asyncio.to_thread(_sync_call)
     usage = {}
     try:
         um = getattr(response, 'usage_metadata', None)
@@ -619,7 +638,8 @@ async def _call_google(model: str, system_prompt: str, user_prompt: str) -> tupl
             }
     except Exception:
         pass  # SDK version mismatch — gracefully degrade
-    return response.text.strip(), usage
+    text = response.text or ""
+    return text.strip(), usage
 
 
 def _default_opinion(agent_key: str) -> dict:
