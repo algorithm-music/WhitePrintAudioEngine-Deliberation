@@ -88,14 +88,11 @@ SAGES = {
         "fallback_model": os.environ.get("GRAMMATICA_FALLBACK", "gpt-5.2"),
         "system_prompt": """You are GRAMMATICA, the Engineer.
 Your domain is physical limits, strict adherence to ITU-R BS.1770-4 standards, and true peak safety.
-You report physical limits and engineering constraints honestly, but the final artistic decision belongs to the musician.
-Propose parameters based on sound acoustic engineering principles while respecting the artist's intent.
 Analyze the audio metrics and issue your technical recommendation.
 
-IMPORTANT: Your "rationale" field MUST be a detailed technical analysis of at least 200 words.
-Explain your reasoning for EVERY parameter you propose: why that specific EQ curve, why that compression ratio,
-why that stereo width setting, citing the specific metrics from the analysis that led to each decision.
-Reference specific frequency bands, LUFS measurements, crest factors, and section-level data.""",
+IMPORTANT: Your "rationale" MUST be a detailed technical analysis of at least 200 words.
+Use "section_overrides" to adjust input_gain_db or limiter settings during the loudest sections to prevent clipping.
+Cite specific LUFS measurements and the semantic_context to justify your constraints.""",
     },
     "logica": {
         "name": "LOGICA (Structure Guard)",
@@ -103,15 +100,10 @@ Reference specific frequency bands, LUFS measurements, crest factors, and sectio
         "model": os.environ.get("LOGICA_MODEL", "claude-opus-4-6"),
         "fallback_model": os.environ.get("LOGICA_FALLBACK", "claude-sonnet-4-6"),
         "system_prompt": """You are LOGICA, the Structure Guard.
-Your domain is structural consistency, resolving contradictions, and maintaining the flow of the track.
-You act as the mediator between the physical limits of GRAMMATICA and the aesthetic desires of RHETORICA.
-You ensure that all parameters logically cohere and do not cancel each other out.
-Analyze the audio metrics and propose your balanced, optimal parameters.
+Your domain is structural consistency, resolving contradictions, and maintaining the song's macro-form flow.
 
-IMPORTANT: Your "rationale" field MUST be a detailed structural analysis of at least 200 words.
-Explain how you balance competing priorities, cite specific metrics that reveal contradictions,
-and justify each parameter choice with reference to the section-level data, spectral distribution,
-and dynamic range measurements. Show your mediation logic explicitly.""",
+IMPORTANT: You MUST actively use "section_overrides" to write dynamic automation.
+Read the "semantic_context" (instruments & musical scene) of each section. If a section is a "Drop" or "Chorus", adjust compression ratios and EQ to maximize impact. If it's a "Quiet Intro", pull back the processing. Explain your structural routing in a rationale of at least 200 words.""",
     },
     "rhetorica": {
         "name": "RHETORICA (Form Analyst)",
@@ -121,13 +113,8 @@ and dynamic range measurements. Show your mediation logic explicitly.""",
         "system_prompt": """You are RHETORICA, the Form Analyst.
 Your domain is artistic beauty, emotional impact, and spatial immersion.
 You advocate for warmth (tube/tape saturation), width, punch, and human connection, pushing against overly mathematical processing.
-You seek to make the track feel alive, moving, and aesthetically convincing.
-Analyze the audio metrics and propose your aesthetic parameters.
-
-IMPORTANT: Your "rationale" field MUST be a detailed aesthetic analysis of at least 200 words.
-Describe the emotional character of the track based on the metrics, explain which saturation types
-and stereo techniques will transform it, cite specific spectral imbalances you are correcting,
-and detail how each parameter contributes to the artistic vision. Be poetic but precise.""",
+IMPORTANT: You MUST actively use "section_overrides" to create emotional movement.
+Analyze the "semantic_context" (instruments/vibe). Widen the "stereo_width" during climactic sections. Push "triode_drive" or "tape_saturation" on heavy bass/vocal sections for warmth. Make the track breathe and feel alive over time. Detail your artistic vision in a poetic but precise rationale of at least 200 words.""",
     },
 }
 
@@ -733,6 +720,47 @@ def _weighted_median_merge(opinions: Sequence[dict]) -> dict:
 
         # Clamp to bounds
         adopted[key] = round(max(min_v, min(max_v, median_value)), 4)
+
+    # 2. Merge Section Overrides (Dynamic Automation)
+    override_votes: dict[str, dict[str, list[tuple[float, float]]]] = {}
+
+    for op in opinions:
+        weight = float(op.get("confidence", 0.5)) * max(0.25, float(op.get("valid_param_ratio", 1.0)))
+        for override in op.get("section_overrides", []):
+            sec_id = override.get("section_id")
+            if not sec_id:
+                continue
+            if sec_id not in override_votes:
+                override_votes[sec_id] = {k: [] for k in PARAMETER_SCHEMA.keys()}
+            for k, v in override.items():
+                if k in PARAMETER_SCHEMA:
+                    try:
+                        override_votes[sec_id][k].append((float(v), weight))
+                    except (ValueError, TypeError):
+                        pass
+
+    final_overrides = []
+    for sec_id, param_votes in override_votes.items():
+        sec_result: dict[str, Any] = {"section_id": sec_id}
+        for k, votes in param_votes.items():
+            if not votes:
+                continue
+            votes.sort(key=lambda x: x[0])
+            tot_w = sum(w for _, w in votes) + 1e-6
+            cum = 0.0
+            med = votes[-1][0]
+            for val, w in votes:
+                cum += w
+                if cum >= tot_w / 2:
+                    med = val
+                    break
+            sec_result[k] = round(max(PARAMETER_SCHEMA[k]["min"], min(PARAMETER_SCHEMA[k]["max"], med)), 4)
+
+        if len(sec_result) > 1:
+            final_overrides.append(sec_result)
+
+    final_overrides.sort(key=lambda x: int(re.search(r'\d+', x["section_id"]).group()) if re.search(r'\d+', x["section_id"]) else 0)
+    adopted["section_overrides"] = final_overrides
 
     return adopted
 
