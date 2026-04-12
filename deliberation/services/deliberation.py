@@ -353,9 +353,13 @@ v2 RENDITION_DSP parameters:
 Also include all v1 parameters (input_gain_db through limiter_ceil_db).
 
 Additionally include:
-- A "rationale" string (minimum 100 characters) explaining your reasoning
+- A "rationale" string (minimum 200 characters) explaining your reasoning
 - A "confidence" float (0-1) indicating your certainty
-- "section_overrides" array for section-specific adjustments
+- "section_overrides": An array of objects to automate parameters over time.
+  YOU MUST INCLUDE THIS ARRAY IF THE TRACK HAS MULTIPLE SECTIONS.
+  Format: [{"section_id": "SEC_0_Intro", "stereo_width": 1.0}, {"section_id": "SEC_1_Drop", "comp_threshold_db": -16.0}]
+  Match "section_id" EXACTLY with the provided Sections.
+  FAILURE TO PROVIDE section_overrides IS A CRITICAL ERROR.
 
 Keep ALL parameters within these ranges:
 {json.dumps({k: {"min": v["min"], "max": v["max"]} for k, v in PARAMETER_SCHEMA.items()}, indent=2)}
@@ -418,9 +422,13 @@ v2 RENDITION_DSP parameters:
 Also include all v1 parameters (input_gain_db through limiter_ceil_db).
 
 Additionally include:
-- A "rationale" string (minimum 100 characters) explaining your reasoning
+- A "rationale" string (minimum 200 characters) explaining your reasoning
 - A "confidence" float (0-1) indicating your certainty
-- "section_overrides" array for section-specific adjustments
+- "section_overrides": An array of objects to automate parameters over time.
+  YOU MUST INCLUDE THIS ARRAY IF THE TRACK HAS MULTIPLE SECTIONS.
+  Format: [{"section_id": "SEC_0_Intro", "stereo_width": 1.0}, {"section_id": "SEC_1_Drop", "comp_threshold_db": -16.0}]
+  Match "section_id" EXACTLY with the provided Sections.
+  FAILURE TO PROVIDE section_overrides IS A CRITICAL ERROR.
 
 Keep ALL parameters within these ranges:
 {json.dumps({k: {"min": v["min"], "max": v["max"]} for k, v in PARAMETER_SCHEMA.items()}, indent=2)}
