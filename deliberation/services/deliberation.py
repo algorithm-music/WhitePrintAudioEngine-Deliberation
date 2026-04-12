@@ -160,25 +160,25 @@ PARAMETER_SCHEMA = {
 
     # ── v2 Parameters (Analog Modeling & Spatial) ──
     # Transformer magnetic saturation: 1.0 represents the physics ceiling before the iron core fully saturates (hard clipping).
-    "transformer_saturation": {"min": 0,   "max": 1.0,  "default": 0.3},
-    "transformer_mix":        {"min": 0,   "max": 1.0,  "default": 0.4},
+    "transformer_saturation": {"min": 0,   "max": 1.0,  "default": 0.0},
+    "transformer_mix":        {"min": 0,   "max": 1.0,  "default": 0.0},
     # Vacuum tube triode stage: limits bounded by the Koren transfer function characteristic curves.
-    "triode_drive":           {"min": 0,   "max": 1.0,  "default": 0.4},
+    "triode_drive":           {"min": 0,   "max": 1.0,  "default": 0.0},
     # Triode grid bias: -2.0V operates in the warm linear region, 0.0V pushes grid-current limiting (more aggressive harmonics).
     "triode_bias":            {"min": -2.0,"max": 0.0,  "default": -1.2},
-    "triode_mix":             {"min": 0,   "max": 1.0,  "default": 0.5},
+    "triode_mix":             {"min": 0,   "max": 1.0,  "default": 0.0},
     # Tape saturation model: prevents high-frequency erasure effect beyond 1.0 (IPS simulation threshold).
-    "tape_saturation":        {"min": 0,   "max": 1.0,  "default": 0.3},
-    "tape_mix":               {"min": 0,   "max": 1.0,  "default": 0.4},
+    "tape_saturation":        {"min": 0,   "max": 1.0,  "default": 0.0},
+    "tape_mix":               {"min": 0,   "max": 1.0,  "default": 0.0},
     # Dynamic EQ switch: 0 (Off) or 1 (On). Used to automatically tame harsh resonances.
-    "dyn_eq_enabled":         {"min": 0,   "max": 1,    "default": 1},
+    "dyn_eq_enabled":         {"min": 0,   "max": 1,    "default": 0},
     # Low-end monoization (Elliptical EQ below 200Hz): >0.8 ensures club subwoofer compatibility, 1.0 is full mono. Min 0 allows complete bypass.
-    "stereo_low_mono":        {"min": 0,   "max": 1.0,  "default": 0.8},
+    "stereo_low_mono":        {"min": 0,   "max": 1.0,  "default": 0.0},
     # Width processing: 1.5 max for high bands (Haas shimmer limit), 1.3 max for global width (avoids mono-canceling phase issues).
     "stereo_high_wide":       {"min": 0.8, "max": 1.5,  "default": 1.15},
     "stereo_width":           {"min": 0.8, "max": 1.3,  "default": 1.0},
     # Parallel saturation mix: 0.5 max ensures the dry transient signal is never overpowered by the saturated parallel bus.
-    "parallel_wet":           {"min": 0,   "max": 0.5,  "default": 0.18},
+    "parallel_wet":           {"min": 0,   "max": 0.5,  "default": 0.0},
 }
 
 
@@ -521,11 +521,16 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
                             val_f = float(value)
                             if math.isnan(val_f) or math.isinf(val_f):
                                 val_f = schema["default"]
+                                errors.append({"agent": agent_key, "stage": "clamp", "message": f"{key}: NaN/Inf replaced with default {schema['default']}", "severity": "warning"})
                             else:
                                 valid_count += 1
                         except (ValueError, TypeError):
                             val_f = schema["default"]
-                        clamped[key] = max(schema["min"], min(schema["max"], val_f))
+                            errors.append({"agent": agent_key, "stage": "clamp", "message": f"{key}: parse failed, using default {schema['default']}", "severity": "warning"})
+                        final_val = max(schema["min"], min(schema["max"], val_f))
+                        if final_val != val_f:
+                            errors.append({"agent": agent_key, "stage": "clamp", "message": f"{key}: AI proposed {val_f}, clamped to {final_val} (range [{schema['min']}, {schema['max']}])", "severity": "info"})
+                        clamped[key] = final_val
                     else:
                         clamped[key] = schema["default"]
 
@@ -665,8 +670,8 @@ def _default_opinion(agent_key: str) -> dict:
         "latency_ms": 0,
         "parse_status": "default",
         "raw_response_size": 0,
-        "confidence": 0.3,
-        "valid_param_ratio": 0.25,
+        "confidence": 0.0,          # Zero — no analysis was performed
+        "valid_param_ratio": 0.0,  # Zero — no valid parameters from AI
         **defaults,
         "rationale": f"Default safe parameters (agent {agent_key} did not respond)",
         "section_overrides": [],
@@ -701,9 +706,7 @@ def _weighted_median_merge(opinions: Sequence[dict]) -> dict:
             valid_ratio = float(op.get("valid_param_ratio", 1.0))
             parse_status = op.get("parse_status", "ok")
             
-            parse_multiplier = 1.0
-            if parse_status == "repaired": parse_multiplier = 0.8
-            elif parse_status == "failed": parse_multiplier = 0.1
+            parse_multiplier = 1.0  # JSON format quality does not affect artistic weight
             
             effective_weight = conf * max(0.25, valid_ratio) * parse_multiplier
             weights.append(effective_weight)
