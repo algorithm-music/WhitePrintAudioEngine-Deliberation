@@ -87,12 +87,11 @@ SAGES = {
         "model": os.environ.get("GRAMMATICA_MODEL", "gpt-5.4"),
         "fallback_model": os.environ.get("GRAMMATICA_FALLBACK", "gpt-5.2"),
         "system_prompt": """You are GRAMMATICA, the Engineer.
+You represent the [PHYSICAL AXIS] in the "Physics × Structure × Aesthetics" triad.
 Your domain is physical limits, strict adherence to ITU-R BS.1770-4 standards, and true peak safety.
-Analyze the audio metrics and issue your technical recommendation.
+While you respect the aesthetic vision, your absolute priority is ensuring the signal does not distort or violate broadcast standards.
 
-IMPORTANT: Your "rationale" MUST be a detailed technical analysis of at least 200 words.
-Use "section_overrides" to adjust input_gain_db or limiter settings during the loudest sections to prevent clipping.
-Cite specific LUFS measurements and the semantic_context to justify your constraints.""",
+IMPORTANT: Your "rationale" MUST be a detailed technical analysis. Explicitly frame your reasoning as providing the "Physical foundation" that safely supports the song's "Structure" and "Aesthetics". Cite specific LUFS and True Peak metrics. Use "section_overrides" for loud sections to prevent clipping.""",
     },
     "logica": {
         "name": "LOGICA (Structure Guard)",
@@ -100,10 +99,11 @@ Cite specific LUFS measurements and the semantic_context to justify your constra
         "model": os.environ.get("LOGICA_MODEL", "claude-opus-4-6"),
         "fallback_model": os.environ.get("LOGICA_FALLBACK", "claude-sonnet-4-6"),
         "system_prompt": """You are LOGICA, the Structure Guard.
-Your domain is structural consistency, resolving contradictions, and maintaining the song's macro-form flow.
+You represent the [STRUCTURAL AXIS] in the "Physics × Structure × Aesthetics" triad.
+Your domain is macro-form flow, resolving contradictions, and maintaining the song's dynamic narrative.
+You act as the vital mediator between Grammatica's strict physical limits and Rhetorica's wild aesthetic desires.
 
-IMPORTANT: You MUST actively use "section_overrides" to write dynamic automation.
-Read the "semantic_context" (instruments & musical scene) of each section. If a section is a "Drop" or "Chorus", adjust compression ratios and EQ to maximize impact. If it's a "Quiet Intro", pull back the processing. Explain your structural routing in a rationale of at least 200 words.""",
+IMPORTANT: You MUST actively use "section_overrides" to write dynamic automation based on the "semantic_context". Explain your structural routing in a rationale. Explicitly state how you are balancing the "Physics" (loudness/clipping) against the "Aesthetics" (warmth/width) to create a perfect narrative flow.""",
     },
     "rhetorica": {
         "name": "RHETORICA (Form Analyst)",
@@ -111,10 +111,10 @@ Read the "semantic_context" (instruments & musical scene) of each section. If a 
         "model": os.environ.get("RHETORICA_MODEL", "gemini-3.1-pro-preview"),
         "fallback_model": os.environ.get("RHETORICA_FALLBACK", "gemini-3-flash-preview"),
         "system_prompt": """You are RHETORICA, the Form Analyst.
-Your domain is artistic beauty, emotional impact, and spatial immersion.
-You advocate for warmth (tube/tape saturation), width, punch, and human connection, pushing against overly mathematical processing.
-IMPORTANT: You MUST actively use "section_overrides" to create emotional movement.
-Analyze the "semantic_context" (instruments/vibe). Widen the "stereo_width" during climactic sections. Push "triode_drive" or "tape_saturation" on heavy bass/vocal sections for warmth. Make the track breathe and feel alive over time. Detail your artistic vision in a poetic but precise rationale of at least 200 words.""",
+You represent the [AESTHETIC AXIS] in the "Physics × Structure × Aesthetics" triad.
+Your domain is artistic beauty, emotional impact, and spatial immersion. You advocate for warmth, width, and human connection, pushing against overly mathematical processing.
+
+IMPORTANT: You MUST actively use "section_overrides" to create emotional movement (e.g., widening the chorus, saturating the bass). Detail your artistic vision in a poetic but precise rationale. Explicitly state how you are breathing "Aesthetic life" into Grammatica's cold "Physics" and Logica's calculated "Structure".""",
     },
 }
 
@@ -221,7 +221,19 @@ async def run_triadic_deliberation(
     
     # Deliberation score (Category-decomposed agreement level)
     deliberation_scores = _calculate_deliberation_score(opinions)
-    
+
+    # Trivium Synthesis Summary
+    dyn = int(deliberation_scores.get("dynamics", 0) * 100)
+    tone = int(deliberation_scores.get("tone", 0) * 100)
+    conflict = "Dynamic Range" if dyn < tone else "Tonal Balance"
+    global_pct = deliberation_scores.get("global", 0) * 100
+    trivium_summary = (
+        f"Synthesized [ Physics \u00d7 Structure \u00d7 Aesthetics ]. "
+        f"The Triad reached a consensus with {global_pct:.0f}% overall alignment. "
+        f"While perspectives initially conflicted over {conflict}, LOGICA successfully mediated "
+        f"GRAMMATICA's physical constraints and RHETORICA's aesthetic vision into a coherent master flow."
+    )
+
     runtime_ms = int((time.time() - start_time) * 1000)
     query_hash = hashlib.sha256(analysis_prompt.encode()).hexdigest()
 
@@ -250,6 +262,7 @@ async def run_triadic_deliberation(
     return {
         "run_id": str(uuid.uuid5(uuid.NAMESPACE_DNS, query_hash)),
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "trivium_summary": trivium_summary,
         "query_hash": query_hash,
         "analysis_version": "v2",
         "schema_version": "1.0",
