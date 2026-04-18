@@ -24,6 +24,7 @@ from typing import Optional, Sequence
 
 import openai
 import anthropic
+from anthropic import AnthropicVertex
 from google import genai
 
 logger = logging.getLogger("deliberation.deliberation")
@@ -67,7 +68,12 @@ def _get_openai_client(key_index: int = 0) -> openai.OpenAI:
     key = _openai_keys[key_index] if key_index < len(_openai_keys) else None
     return openai.OpenAI(api_key=key)
 
-def _get_anthropic_client(key_index: int = 0) -> anthropic.Anthropic:
+def _get_anthropic_client(key_index: int = 0):
+    if os.environ.get("ANTHROPIC_USE_VERTEX", "").lower() in ("1", "true", "yes"):
+        return AnthropicVertex(
+            region=os.environ.get("ANTHROPIC_VERTEX_REGION", "global"),
+            project_id=os.environ.get("ANTHROPIC_VERTEX_PROJECT", os.environ.get("GOOGLE_CLOUD_PROJECT", GCP_PROJECT_ID)),
+        )
     key = _anthropic_keys[key_index] if key_index < len(_anthropic_keys) else None
     return anthropic.Anthropic(api_key=key)
 
@@ -85,7 +91,8 @@ SAGES = {
         "name": "GRAMMATICA (Engineer)",
         "provider": "openai",
         "model": os.environ.get("GRAMMATICA_MODEL", "gpt-5.4"),
-        "fallback_model": os.environ.get("GRAMMATICA_FALLBACK", "gpt-5.2"),
+        "fallback_provider": os.environ.get("GRAMMATICA_FALLBACK_PROVIDER", "google"),
+        "fallback_model": os.environ.get("GRAMMATICA_FALLBACK", "gemini-2.5-flash"),
         "system_prompt": """You are GRAMMATICA, the Engineer.
 You represent the [PHYSICAL AXIS] in the "Physics × Structure × Aesthetics" triad.
 Your domain is physical limits, strict adherence to ITU-R BS.1770-4 standards, and true peak safety.
@@ -96,8 +103,9 @@ IMPORTANT: Your "rationale" MUST be a detailed technical analysis. Explicitly fr
     "logica": {
         "name": "LOGICA (Structure Guard)",
         "provider": "anthropic",
-        "model": os.environ.get("LOGICA_MODEL", "claude-opus-4-6"),
-        "fallback_model": os.environ.get("LOGICA_FALLBACK", "claude-sonnet-4-6"),
+        "model": os.environ.get("LOGICA_MODEL", "claude-opus-4-7"),
+        "fallback_provider": os.environ.get("LOGICA_FALLBACK_PROVIDER", "google"),
+        "fallback_model": os.environ.get("LOGICA_FALLBACK", "gemini-2.5-flash"),
         "system_prompt": """You are LOGICA, the Structure Guard.
 You represent the [STRUCTURAL AXIS] in the "Physics × Structure × Aesthetics" triad.
 Your domain is macro-form flow, resolving contradictions, and maintaining the song's dynamic narrative.
@@ -109,7 +117,8 @@ IMPORTANT: You MUST actively use "section_overrides" to write dynamic automation
         "name": "RHETORICA (Form Analyst)",
         "provider": "google",
         "model": os.environ.get("RHETORICA_MODEL", "gemini-3.1-pro-preview"),
-        "fallback_model": os.environ.get("RHETORICA_FALLBACK", "gemini-3-flash-preview"),
+        "fallback_provider": os.environ.get("RHETORICA_FALLBACK_PROVIDER", "google"),
+        "fallback_model": os.environ.get("RHETORICA_FALLBACK", "gemini-2.5-flash"),
         "system_prompt": """You are RHETORICA, the Form Analyst.
 You represent the [AESTHETIC AXIS] in the "Physics × Structure × Aesthetics" triad.
 Your domain is artistic beauty, emotional impact, and spatial immersion. You advocate for warmth, width, and human connection, pushing against overly mathematical processing.
@@ -469,32 +478,36 @@ def _robust_json_parse(text: str) -> dict:
 async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
     """Query an LLM agent via its configured provider.
 
-    Retry strategy: for each API key in the pool, try primary model then fallback model.
-    This gives maximum resilience against rate limits, expired keys, or quota exhaustion.
+    Retry strategy: iterate through (provider, model) attempts — primary then fallback —
+    and for each, cycle through that provider's API key pool. Supports cross-provider
+    fallback (e.g. OpenAI primary → Gemini fallback).
     """
-    provider = persona.get("provider", "google")
+    primary_provider = persona.get("provider", "google")
     primary_model = persona.get("model", "gemini-3.1-pro-preview")
+    fallback_provider = persona.get("fallback_provider", primary_provider)
     fallback_model = persona.get("fallback_model")
 
-    # Determine how many API keys are available for this provider
-    key_pool_size = max(1, len(
-        _openai_keys if provider == "openai"
-        else _anthropic_keys if provider == "anthropic"
-        else _google_keys
-    ))
+    attempts_plan = [(primary_provider, primary_model)]
+    if fallback_model:
+        attempts_plan.append((fallback_provider, fallback_model))
 
     errors = []
     token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    global_attempt = 0
 
-    for key_idx in range(key_pool_size):
-        for attempt, model in enumerate([primary_model, fallback_model]):
-            if model is None:
-                continue
+    for attempt_idx, (prov, model) in enumerate(attempts_plan):
+        key_pool_size = max(1, len(
+            _openai_keys if prov == "openai"
+            else _anthropic_keys if prov == "anthropic"
+            else _google_keys
+        ))
+        for key_idx in range(key_pool_size):
+            global_attempt += 1
             try:
                 call_start = time.time()
-                if provider == "openai":
+                if prov == "openai":
                     text, usage = await _call_openai(model, persona["system_prompt"], prompt, key_idx)
-                elif provider == "anthropic":
+                elif prov == "anthropic":
                     text, usage = await _call_anthropic(model, persona["system_prompt"], prompt, key_idx)
                 else:
                     text, usage = await _call_google(model, persona["system_prompt"], prompt, key_idx)
@@ -505,16 +518,26 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
                 params = parse_result["parsed"]
                 parse_status = parse_result["status"]
 
+                # LLMs occasionally return a JSON array at the top level; coerce to dict.
+                if not isinstance(params, dict):
+                    params = {}
+                    parse_status = "failed"
+
+                # If parsing produced nothing usable, treat as failure so the
+                # retry/fallback loop can try the next model (e.g. gemini-2.5-flash).
+                if parse_status == "failed" or not params:
+                    raise RuntimeError(f"Unusable response from {prov}/{model}")
+
                 if parse_status == "repaired":
                     errors.append({
-                        "agent": agent_key, "provider": provider, "model": model,
+                        "agent": agent_key, "provider": prov, "model": model,
                         "stage": "json_parse",
                         "message": "Malformed JSON repaired via regex/bracket extraction",
                         "severity": "warning"
                     })
                 elif parse_status == "failed":
                     errors.append({
-                        "agent": agent_key, "provider": provider, "model": model,
+                        "agent": agent_key, "provider": prov, "model": model,
                         "stage": "json_parse",
                         "message": "Complete JSON parse failure. Defaulting values.",
                         "severity": "error"
@@ -542,12 +565,12 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
                     else:
                         clamped[key] = schema["default"]
 
-                is_fallback = attempt > 0 or key_idx > 0
+                is_fallback = global_attempt > 1
                 if is_fallback:
-                    msg = f"Agent {agent_key}: succeeded with key[{key_idx}]/{model}"
+                    msg = f"Agent {agent_key}: succeeded with {prov}/key[{key_idx}]/{model}"
                     logger.warning(msg)
                     errors.append({
-                        "agent": agent_key, "provider": provider, "model": model,
+                        "agent": agent_key, "provider": prov, "model": model,
                         "stage": "fallback", "message": msg, "severity": "warning"
                     })
 
@@ -556,7 +579,7 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
 
                 return {
                     "agent_name": agent_key,
-                    "provider": provider,
+                    "provider": prov,
                     "model": model,
                     "is_fallback": is_fallback,
                     "latency_ms": latency_ms,
@@ -573,14 +596,14 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
 
             except Exception as e:
                 msg = str(e)
-                is_last = (key_idx == key_pool_size - 1) and (attempt > 0 or fallback_model is None)
+                is_last = (attempt_idx == len(attempts_plan) - 1) and (key_idx == key_pool_size - 1)
                 severity = "error" if is_last else "warning"
                 errors.append({
-                    "agent": agent_key, "provider": provider, "model": model,
+                    "agent": agent_key, "provider": prov, "model": model,
                     "stage": "api_call", "message": f"key[{key_idx}] {msg}",
                     "severity": severity
                 })
-                logger.warning(f"Agent {agent_key} key[{key_idx}]/{model} failed: {e}")
+                logger.warning(f"Agent {agent_key} {prov}/key[{key_idx}]/{model} failed: {e}")
 
     default_op = _default_opinion(agent_key)
     default_op["errors"] = errors
@@ -617,6 +640,7 @@ async def _call_anthropic(model: str, system_prompt: str, user_prompt: str, key_
     client = _get_anthropic_client(key_index)
 
     def _sync_call():
+        # Newer Claude models (Opus 4.7+) deprecate `temperature`; omit for compatibility.
         response = client.messages.create(
             model=model,
             max_tokens=4096,
@@ -624,7 +648,6 @@ async def _call_anthropic(model: str, system_prompt: str, user_prompt: str, key_
             messages=[
                 {"role": "user", "content": user_prompt + "\n\nRespond with a JSON object only."},
             ],
-            temperature=0.3,
         )
         usage = {
             "prompt_tokens": response.usage.input_tokens,
