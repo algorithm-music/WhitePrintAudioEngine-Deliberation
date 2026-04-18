@@ -357,7 +357,7 @@ Additionally include:
 - A "confidence" float (0-1) indicating your certainty
 - "section_overrides": An array of objects to automate parameters over time.
   YOU MUST INCLUDE THIS ARRAY IF THE TRACK HAS MULTIPLE SECTIONS.
-  Format: [{"section_id": "SEC_0_Intro", "stereo_width": 1.0}, {"section_id": "SEC_1_Drop", "comp_threshold_db": -16.0}]
+  Format: [{{"section_id": "SEC_0_Intro", "stereo_width": 1.0}}, {{"section_id": "SEC_1_Drop", "comp_threshold_db": -16.0}}]
   Match "section_id" EXACTLY with the provided Sections.
   FAILURE TO PROVIDE section_overrides IS A CRITICAL ERROR.
 
@@ -426,7 +426,7 @@ Additionally include:
 - A "confidence" float (0-1) indicating your certainty
 - "section_overrides": An array of objects to automate parameters over time.
   YOU MUST INCLUDE THIS ARRAY IF THE TRACK HAS MULTIPLE SECTIONS.
-  Format: [{"section_id": "SEC_0_Intro", "stereo_width": 1.0}, {"section_id": "SEC_1_Drop", "comp_threshold_db": -16.0}]
+  Format: [{{"section_id": "SEC_0_Intro", "stereo_width": 1.0}}, {{"section_id": "SEC_1_Drop", "comp_threshold_db": -16.0}}]
   Match "section_id" EXACTLY with the provided Sections.
   FAILURE TO PROVIDE section_overrides IS A CRITICAL ERROR.
 
