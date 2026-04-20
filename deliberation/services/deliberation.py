@@ -20,7 +20,7 @@ import uuid
 import hashlib
 import asyncio
 from datetime import datetime, timezone
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Any
 
 import openai
 import anthropic
@@ -139,7 +139,7 @@ PARAMETER_SCHEMA = {
     "eq_low_shelf_gain_db": {"min": -6,    "max": 6,    "default": 0},
     "eq_low_mid_gain_db":   {"min": -6,    "max": 6,    "default": 0},
     "eq_high_mid_gain_db":  {"min": -6,    "max": 6,    "default": 0},
-    "eq_high_shelf_gain_db":{"min": -6,    "max": 6,    "default": 0},
+    "eq_high_shelf_gain_db": {"min": -6,    "max": 6,    "default": 0},
     # Mid/Side gain: ±3dB max. Radical M/S changes (>3dB) destroy phase correlation and collapse mono compatibility.
     "ms_side_high_gain_db": {"min": -3,    "max": 3,    "default": 0},
     "ms_mid_low_gain_db":   {"min": -3,    "max": 3,    "default": 0},
@@ -305,6 +305,8 @@ def _build_analysis_prompt(analysis_data, platform, target_lufs, target_true_pea
     formplan = analysis_data.get("formplan")
     track_id = analysis_data.get("track_identity", {})
     whole = analysis_data.get("whole_track_metrics", {})
+    envs = analysis_data.get("time_series_circuit_envelopes", {})
+    problems_legacy = analysis_data.get("detected_problems", [])
 
     if formplan:
         # New v2 format: use formplan for richer context
@@ -338,10 +340,15 @@ def _build_analysis_prompt(analysis_data, platform, target_lufs, target_true_pea
 ### Sections ({len(sections)})
 {json.dumps(sections[:8], indent=2)}
 
+### Time-Series Envelopes
+{json.dumps(envs, indent=2)}
+
 ---
 
 Based on this formplan, propose optimal RENDITION_DSP parameters.
 The formplan targets tell you WHAT to achieve. You decide HOW via RENDITION_DSP params.
+
+**SECTION-BY-SECTION EQ STRATEGY**: Delicately shape the overall frequency response by prioritizing negative band cuts (subtractive EQ). Avoid boosting; instead, finely carve out problematic or masking frequencies. YOU MUST apply this dynamically on a PER-SECTION basis using `section_overrides`, tailoring the cuts to the specific instrumentation and energy of each section.
 
 Respond with a JSON object containing ALL parameters listed below.
 
@@ -362,7 +369,8 @@ v2 RENDITION_DSP parameters:
 Also include all v1 parameters (input_gain_db through limiter_ceil_db).
 
 Additionally include:
-- A "rationale" string (minimum 200 characters) explaining your reasoning
+- A "deliberation_minutes" string (minimum 400 characters) containing the detailed meeting minutes (議事録) and step-by-step reasoning for the chosen parameters. YOU MUST OUTPUT THIS.
+- A "rationale" string (minimum 200 characters) summarizing your reasoning.
 - A "confidence" float (0-1) indicating your certainty
 - "section_overrides": An array of objects to automate parameters over time.
   YOU MUST INCLUDE THIS ARRAY IF THE TRACK HAS MULTIPLE SECTIONS.
@@ -382,29 +390,17 @@ Keep ALL parameters within these ranges:
 - Target LUFS: {target_lufs}
 - Target True Peak: {target_true_peak} dBTP
 
-### Current Metrics
-- Integrated LUFS: {whole.get('integrated_lufs', 'N/A')}
-- True Peak: {whole.get('true_peak_dbtp', 'N/A')} dBTP
-- Crest Factor: {whole.get('crest_db', 'N/A')} dB
-- Stereo Width: {whole.get('stereo_width', 'N/A')}
-- BPM: {track_id.get('bpm', analysis_data.get('bpm', 'N/A'))}
-- Key: {track_id.get('key', 'N/A')}
+### Track Identity
+{json.dumps(track_id, indent=2)}
 
-### Band Ratios
-- Sub: {whole.get('sub_ratio', 'N/A')}
-- Bass: {whole.get('bass_ratio', 'N/A')}
-- Low Mid: {whole.get('low_mid_ratio', 'N/A')}
-- Mid: {whole.get('mid_ratio', 'N/A')}
-- High: {whole.get('high_ratio', 'N/A')}
-- Air: {whole.get('air_ratio', 'N/A')}
+### Whole-Track Metrics
+{json.dumps(whole, indent=2)}
 
-### Risk Scores
-- Harshness: {whole.get('harshness_risk', 'N/A')}
-- Mud: {whole.get('mud_risk', 'N/A')}
+### Detected Problems
+{json.dumps(problems_legacy, indent=2)}
 
-### Spatial
-- Stereo Correlation: {whole.get('stereo_correlation', 'N/A')}
-- Low Mono Correlation (<120Hz): {whole.get('low_mono_correlation_below_120hz', 'N/A')}
+### Time-Series Envelopes
+{json.dumps(envs, indent=2)}
 
 ### Sections
 {json.dumps(analysis_data.get('raw_sections', analysis_data.get('physical_sections', []))[:8], indent=2)}
@@ -412,6 +408,9 @@ Keep ALL parameters within these ranges:
 ---
 
 Based on this analysis, propose optimal mastering parameters.
+
+**SECTION-BY-SECTION EQ STRATEGY**: Delicately shape the overall frequency response by prioritizing negative band cuts (subtractive EQ). Avoid boosting; instead, finely carve out problematic or masking frequencies. YOU MUST apply this dynamically on a PER-SECTION basis using `section_overrides`, tailoring the cuts to the specific instrumentation and energy of each section.
+
 Respond with a JSON object containing ALL parameters listed below.
 
 v2 RENDITION_DSP parameters:
@@ -431,7 +430,8 @@ v2 RENDITION_DSP parameters:
 Also include all v1 parameters (input_gain_db through limiter_ceil_db).
 
 Additionally include:
-- A "rationale" string (minimum 200 characters) explaining your reasoning
+- A "deliberation_minutes" string (minimum 400 characters) containing the detailed meeting minutes (議事録) and step-by-step reasoning for the chosen parameters. YOU MUST OUTPUT THIS.
+- A "rationale" string (minimum 200 characters) summarizing your reasoning.
 - A "confidence" float (0-1) indicating your certainty
 - "section_overrides": An array of objects to automate parameters over time.
   YOU MUST INCLUDE THIS ARRAY IF THE TRACK HAS MULTIPLE SECTIONS.
@@ -588,6 +588,7 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
                     "confidence": min(1.0, max(0.0, raw_confidence)),
                     "valid_param_ratio": valid_ratio,
                     **clamped,
+                    "deliberation_minutes": params.get("deliberation_minutes", "No minutes provided."),
                     "rationale": params.get("rationale", f"Agent {agent_key} analysis"),
                     "section_overrides": params.get("section_overrides", []),
                     "errors": errors,
@@ -704,6 +705,7 @@ def _default_opinion(agent_key: str) -> dict:
         "confidence": 0.0,          # Zero — no analysis was performed
         "valid_param_ratio": 0.0,  # Zero — no valid parameters from AI
         **defaults,
+        "deliberation_minutes": "No minutes generated due to fallback.",
         "rationale": f"Default safe parameters (agent {agent_key} did not respond)",
         "section_overrides": [],
     }
@@ -735,7 +737,6 @@ def _weighted_median_merge(opinions: Sequence[dict]) -> dict:
             
             conf = float(op.get("confidence", 0.5))
             valid_ratio = float(op.get("valid_param_ratio", 1.0))
-            parse_status = op.get("parse_status", "ok")
             
             parse_multiplier = 1.0  # JSON format quality does not affect artistic weight
             
