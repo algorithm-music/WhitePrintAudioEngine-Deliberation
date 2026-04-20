@@ -35,6 +35,7 @@ logger = logging.getLogger("deliberation.deliberation")
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "aidriven-mastering-fyqu")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "asia-northeast1")
 
+
 # ──────────────────────────────────────────
 # Multi-key client pool (fallback across API keys)
 # ──────────────────────────────────────────
@@ -50,32 +51,43 @@ def _get_env_keys(prefix: str) -> list[str]:
             keys.append(k)
     return keys
 
+
 _openai_keys: list[str] = []
 _anthropic_keys: list[str] = []
 _google_keys: list[str] = []
+
 
 def _init_key_pools():
     global _openai_keys, _anthropic_keys, _google_keys
     _openai_keys = _get_env_keys("OPENAI_API_KEY")
     _anthropic_keys = _get_env_keys("ANTHROPIC_API_KEY")
     _google_keys = _get_env_keys("GOOGLE_API_KEY")
-    logger.info(f"Key pools: OpenAI={len(_openai_keys)}, Anthropic={len(_anthropic_keys)}, Google={len(_google_keys)}")
+    logger.info(
+        f"Key pools: OpenAI={len(_openai_keys)}, Anthropic={len(_anthropic_keys)}, Google={len(_google_keys)}"
+    )
+
 
 # Initialize on module load
 _init_key_pools()
+
 
 def _get_openai_client(key_index: int = 0) -> openai.OpenAI:
     key = _openai_keys[key_index] if key_index < len(_openai_keys) else None
     return openai.OpenAI(api_key=key)
 
+
 def _get_anthropic_client(key_index: int = 0):
     if os.environ.get("ANTHROPIC_USE_VERTEX", "").lower() in ("1", "true", "yes"):
         return AnthropicVertex(
             region=os.environ.get("ANTHROPIC_VERTEX_REGION", "global"),
-            project_id=os.environ.get("ANTHROPIC_VERTEX_PROJECT", os.environ.get("GOOGLE_CLOUD_PROJECT", GCP_PROJECT_ID)),
+            project_id=os.environ.get(
+                "ANTHROPIC_VERTEX_PROJECT",
+                os.environ.get("GOOGLE_CLOUD_PROJECT", GCP_PROJECT_ID),
+            ),
         )
     key = _anthropic_keys[key_index] if key_index < len(_anthropic_keys) else None
     return anthropic.Anthropic(api_key=key)
+
 
 def _get_google_client(key_index: int = 0) -> genai.Client:
     if key_index < len(_google_keys):
@@ -134,47 +146,46 @@ IMPORTANT: You MUST actively use "section_overrides" to create emotional movemen
 PARAMETER_SCHEMA = {
     # ── v1 Parameters (Broadband & Dynamics) ──
     # Input gain: -6dB limits headroom loss before processing, +12dB allows recovering quiet bedroom mixes without clipping the entry stage.
-    "input_gain_db":        {"min": -6,    "max": 12,   "default": 0},
+    "input_gain_db": {"min": -6, "max": 12, "default": 0},
     # Broad EQ bands: ±6dB max. Mastering shouldn't require beyond 6dB of broadband EQ. If more is needed, the mix itself is fatally flawed.
-    "eq_low_shelf_gain_db": {"min": -6,    "max": 6,    "default": 0},
-    "eq_low_mid_gain_db":   {"min": -6,    "max": 6,    "default": 0},
-    "eq_high_mid_gain_db":  {"min": -6,    "max": 6,    "default": 0},
-    "eq_high_shelf_gain_db": {"min": -6,    "max": 6,    "default": 0},
+    "eq_low_shelf_gain_db": {"min": -6, "max": 6, "default": 0},
+    "eq_low_mid_gain_db": {"min": -6, "max": 6, "default": 0},
+    "eq_high_mid_gain_db": {"min": -6, "max": 6, "default": 0},
+    "eq_high_shelf_gain_db": {"min": -6, "max": 6, "default": 0},
     # Mid/Side gain: ±3dB max. Radical M/S changes (>3dB) destroy phase correlation and collapse mono compatibility.
-    "ms_side_high_gain_db": {"min": -3,    "max": 3,    "default": 0},
-    "ms_mid_low_gain_db":   {"min": -3,    "max": 3,    "default": 0},
+    "ms_side_high_gain_db": {"min": -3, "max": 3, "default": 0},
+    "ms_mid_low_gain_db": {"min": -3, "max": 3, "default": 0},
     # Compressor thresholds: -24dB max depth ensures we don't compress the noise floor. -6dB minimum allows catching just the stray peaks.
-    "comp_threshold_db":    {"min": -24,   "max": -6,   "default": -12},
+    "comp_threshold_db": {"min": -24, "max": -6, "default": -12},
     # Compressor ratio: 6:1 max keeps it as a bus compressor (not a limiter). 1.5:1 min ensures it functions as intended "glue".
-    "comp_ratio":           {"min": 1.5,   "max": 6,    "default": 2.5},
+    "comp_ratio": {"min": 1.5, "max": 6, "default": 2.5},
     # Attack: 1ms min (fast enough for transients without distortion), 100ms max (slow enough to let EDM kicks punch through).
-    "comp_attack_sec":      {"min": 0.001, "max": 0.1,  "default": 0.01},
+    "comp_attack_sec": {"min": 0.001, "max": 0.1, "default": 0.01},
     # Release: 50ms min (prevents low-frequency distortion/pumping), 500ms max (smooth leveling without "swallowing" the next downbeat).
-    "comp_release_sec":     {"min": 0.05,  "max": 0.5,  "default": 0.15},
+    "comp_release_sec": {"min": 0.05, "max": 0.5, "default": 0.15},
     # True Peak Limiter Ceiling: -0.1dBTP minimum safety margin (ITU-R BS.1770), -0.3dBTP is safer for lossy codec transcoding (Spotify/Apple).
-    "limiter_ceil_db":      {"min": -0.3,  "max": -0.1, "default": -0.1},
-
+    "limiter_ceil_db": {"min": -0.3, "max": -0.1, "default": -0.1},
     # ── v2 Parameters (Analog Modeling & Spatial) ──
     # Transformer magnetic saturation: 1.0 represents the physics ceiling before the iron core fully saturates (hard clipping).
-    "transformer_saturation": {"min": 0,   "max": 1.0,  "default": 0.0},
-    "transformer_mix":        {"min": 0,   "max": 1.0,  "default": 0.0},
+    "transformer_saturation": {"min": 0, "max": 1.0, "default": 0.0},
+    "transformer_mix": {"min": 0, "max": 1.0, "default": 0.0},
     # Vacuum tube triode stage: limits bounded by the Koren transfer function characteristic curves.
-    "triode_drive":           {"min": 0,   "max": 1.0,  "default": 0.0},
+    "triode_drive": {"min": 0, "max": 1.0, "default": 0.0},
     # Triode grid bias: -2.0V operates in the warm linear region, 0.0V pushes grid-current limiting (more aggressive harmonics).
-    "triode_bias":            {"min": -2.0,"max": 0.0,  "default": -1.2},
-    "triode_mix":             {"min": 0,   "max": 1.0,  "default": 0.0},
+    "triode_bias": {"min": -2.0, "max": 0.0, "default": -1.2},
+    "triode_mix": {"min": 0, "max": 1.0, "default": 0.0},
     # Tape saturation model: prevents high-frequency erasure effect beyond 1.0 (IPS simulation threshold).
-    "tape_saturation":        {"min": 0,   "max": 1.0,  "default": 0.0},
-    "tape_mix":               {"min": 0,   "max": 1.0,  "default": 0.0},
+    "tape_saturation": {"min": 0, "max": 1.0, "default": 0.0},
+    "tape_mix": {"min": 0, "max": 1.0, "default": 0.0},
     # Dynamic EQ switch: 0 (Off) or 1 (On). Used to automatically tame harsh resonances.
-    "dyn_eq_enabled":         {"min": 0,   "max": 1,    "default": 0},
+    "dyn_eq_enabled": {"min": 0, "max": 1, "default": 0},
     # Low-end monoization (Elliptical EQ below 200Hz): >0.8 ensures club subwoofer compatibility, 1.0 is full mono. Min 0 allows complete bypass.
-    "stereo_low_mono":        {"min": 0,   "max": 1.0,  "default": 0.0},
+    "stereo_low_mono": {"min": 0, "max": 1.0, "default": 0.0},
     # Width processing: 1.5 max for high bands (Haas shimmer limit), 1.3 max for global width (avoids mono-canceling phase issues).
-    "stereo_high_wide":       {"min": 0.8, "max": 1.5,  "default": 1.15},
-    "stereo_width":           {"min": 0.8, "max": 1.3,  "default": 1.0},
+    "stereo_high_wide": {"min": 0.8, "max": 1.5, "default": 1.15},
+    "stereo_width": {"min": 0.8, "max": 1.3, "default": 1.0},
     # Parallel saturation mix: 0.5 max ensures the dry transient signal is never overpowered by the saturated parallel bus.
-    "parallel_wet":           {"min": 0,   "max": 0.5,  "default": 0.0},
+    "parallel_wet": {"min": 0, "max": 0.5, "default": 0.0},
 }
 
 
@@ -187,7 +198,7 @@ async def run_triadic_deliberation(
 ) -> dict:
     """
     Run 3-agent independent assessment and return adopted parameters.
-    
+
     Flow:
       1. Send analysis to all 3 agents in parallel (no multi-turn debate)
       2. Each agent proposes parameters independently
@@ -201,7 +212,7 @@ async def run_triadic_deliberation(
 
     # Custom Persona Injection or Plugin Selection
     active_sages = SAGES  # Default: TRIVIUM 3-Sage
-    
+
     if sage_config:
         custom_personas = sage_config.get("custom_personas")
         if custom_personas and isinstance(custom_personas, dict):
@@ -216,9 +227,9 @@ async def run_triadic_deliberation(
                 active_sages = _get_ts_envelope_personas()
 
     # Query all sages in parallel (independent assessment — no debate)
-    
+
     start_time = time.time()
-    
+
     tasks = [
         _query_agent(sage_key, sage, analysis_prompt)
         for sage_key, sage in active_sages.items()
@@ -227,7 +238,7 @@ async def run_triadic_deliberation(
 
     # Deterministic weighted median merge (replaces deprecated Nash product)
     adopted = _weighted_median_merge(opinions)
-    
+
     # Deliberation score (Category-decomposed agreement level)
     deliberation_scores = _calculate_deliberation_score(opinions)
 
@@ -248,7 +259,7 @@ async def run_triadic_deliberation(
 
     all_errors = []
     total_tokens = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    
+
     # Provider results mapping taking active sages into account with fallbacks/models
     active_sage_info = {}
     for k, v in active_sages.items():
@@ -256,9 +267,9 @@ async def run_triadic_deliberation(
             "name": v.get("name", "Unknown"),
             "provider": v.get("provider", "unknown"),
             "primary_model": v.get("model", "unknown"),
-            "fallback_model": v.get("fallback_model", "none")
+            "fallback_model": v.get("fallback_model", "none"),
         }
-    
+
     for op in opinions:
         if "errors" in op:
             all_errors.extend(op.get("errors", []))
@@ -277,12 +288,15 @@ async def run_triadic_deliberation(
         "schema_version": "1.0",
         "sage_config": sage_config or {},
         "active_sages": active_sage_info,
-        "provider_results": {op.get("agent_name", f"agent_{i}"): {
-            "provider": op.get("provider"), 
-            "model": op.get("model"), 
-            "parse_status": op.get("parse_status"),
-            "latency_ms": op.get("latency_ms")
-        } for i, op in enumerate(opinions)},
+        "provider_results": {
+            op.get("agent_name", f"agent_{i}"): {
+                "provider": op.get("provider"),
+                "model": op.get("model"),
+                "parse_status": op.get("parse_status"),
+                "latency_ms": op.get("latency_ms"),
+            }
+            for i, op in enumerate(opinions)
+        },
         "merge_strategy": "weighted_median_v2_validity_aware",
         "runtime_ms": runtime_ms,
         "token_usage": total_tokens,
@@ -296,7 +310,9 @@ async def run_triadic_deliberation(
     }
 
 
-def _build_analysis_prompt(analysis_data, platform, target_lufs, target_true_peak) -> str:
+def _build_analysis_prompt(
+    analysis_data, platform, target_lufs, target_true_peak
+) -> str:
     """Build structured prompt from analysis data.
 
     Supports both legacy (v1) and new (v2 formplan-enriched) analysis formats.
@@ -447,13 +463,18 @@ Keep ALL parameters within these ranges:
 def _robust_json_parse(text: str) -> dict:
     """JSON Normalization Layer: Handles markdown fences and parse errors safely."""
     text = text.strip()
-    
+
     # 1. Try to extract from markdown fences first
     import re
-    fence_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+
+    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if fence_match:
         try:
-            return {"parsed": json.loads(fence_match.group(1)), "status": "ok", "raw": text}
+            return {
+                "parsed": json.loads(fence_match.group(1)),
+                "status": "ok",
+                "raw": text,
+            }
         except json.JSONDecodeError:
             pass
 
@@ -462,18 +483,19 @@ def _robust_json_parse(text: str) -> dict:
         return {"parsed": json.loads(text), "status": "ok", "raw": text}
     except json.JSONDecodeError:
         pass
-        
+
     # 3. Extract tightest possible braces
-    first_brace = text.find('{')
-    last_brace = text.rfind('}')
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
     if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
         try:
-            parsed = json.loads(text[first_brace:last_brace+1])
+            parsed = json.loads(text[first_brace : last_brace + 1])
             return {"parsed": parsed, "status": "repaired", "raw": text}
         except json.JSONDecodeError:
             pass
-            
+
     return {"parsed": {}, "status": "failed", "raw": text}
+
 
 async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
     """Query an LLM agent via its configured provider.
@@ -496,21 +518,30 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
     global_attempt = 0
 
     for attempt_idx, (prov, model) in enumerate(attempts_plan):
-        key_pool_size = max(1, len(
-            _openai_keys if prov == "openai"
-            else _anthropic_keys if prov == "anthropic"
-            else _google_keys
-        ))
+        key_pool_size = max(
+            1,
+            len(
+                _openai_keys
+                if prov == "openai"
+                else _anthropic_keys if prov == "anthropic" else _google_keys
+            ),
+        )
         for key_idx in range(key_pool_size):
             global_attempt += 1
             try:
                 call_start = time.time()
                 if prov == "openai":
-                    text, usage = await _call_openai(model, persona["system_prompt"], prompt, key_idx)
+                    text, usage = await _call_openai(
+                        model, persona["system_prompt"], prompt, key_idx
+                    )
                 elif prov == "anthropic":
-                    text, usage = await _call_anthropic(model, persona["system_prompt"], prompt, key_idx)
+                    text, usage = await _call_anthropic(
+                        model, persona["system_prompt"], prompt, key_idx
+                    )
                 else:
-                    text, usage = await _call_google(model, persona["system_prompt"], prompt, key_idx)
+                    text, usage = await _call_google(
+                        model, persona["system_prompt"], prompt, key_idx
+                    )
                 latency_ms = int((time.time() - call_start) * 1000)
                 token_usage = usage
 
@@ -529,19 +560,27 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
                     raise RuntimeError(f"Unusable response from {prov}/{model}")
 
                 if parse_status == "repaired":
-                    errors.append({
-                        "agent": agent_key, "provider": prov, "model": model,
-                        "stage": "json_parse",
-                        "message": "Malformed JSON repaired via regex/bracket extraction",
-                        "severity": "warning"
-                    })
+                    errors.append(
+                        {
+                            "agent": agent_key,
+                            "provider": prov,
+                            "model": model,
+                            "stage": "json_parse",
+                            "message": "Malformed JSON repaired via regex/bracket extraction",
+                            "severity": "warning",
+                        }
+                    )
                 elif parse_status == "failed":
-                    errors.append({
-                        "agent": agent_key, "provider": prov, "model": model,
-                        "stage": "json_parse",
-                        "message": "Complete JSON parse failure. Defaulting values.",
-                        "severity": "error"
-                    })
+                    errors.append(
+                        {
+                            "agent": agent_key,
+                            "provider": prov,
+                            "model": model,
+                            "stage": "json_parse",
+                            "message": "Complete JSON parse failure. Defaulting values.",
+                            "severity": "error",
+                        }
+                    )
 
                 clamped = {}
                 valid_count = 0
@@ -552,15 +591,36 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
                             val_f = float(value)
                             if math.isnan(val_f) or math.isinf(val_f):
                                 val_f = schema["default"]
-                                errors.append({"agent": agent_key, "stage": "clamp", "message": f"{key}: NaN/Inf replaced with default {schema['default']}", "severity": "warning"})
+                                errors.append(
+                                    {
+                                        "agent": agent_key,
+                                        "stage": "clamp",
+                                        "message": f"{key}: NaN/Inf replaced with default {schema['default']}",
+                                        "severity": "warning",
+                                    }
+                                )
                             else:
                                 valid_count += 1
                         except (ValueError, TypeError):
                             val_f = schema["default"]
-                            errors.append({"agent": agent_key, "stage": "clamp", "message": f"{key}: parse failed, using default {schema['default']}", "severity": "warning"})
+                            errors.append(
+                                {
+                                    "agent": agent_key,
+                                    "stage": "clamp",
+                                    "message": f"{key}: parse failed, using default {schema['default']}",
+                                    "severity": "warning",
+                                }
+                            )
                         final_val = max(schema["min"], min(schema["max"], val_f))
                         if final_val != val_f:
-                            errors.append({"agent": agent_key, "stage": "clamp", "message": f"{key}: AI proposed {val_f}, clamped to {final_val} (range [{schema['min']}, {schema['max']}])", "severity": "info"})
+                            errors.append(
+                                {
+                                    "agent": agent_key,
+                                    "stage": "clamp",
+                                    "message": f"{key}: AI proposed {val_f}, clamped to {final_val} (range [{schema['min']}, {schema['max']}])",
+                                    "severity": "info",
+                                }
+                            )
                         clamped[key] = final_val
                     else:
                         clamped[key] = schema["default"]
@@ -569,12 +629,20 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
                 if is_fallback:
                     msg = f"Agent {agent_key}: succeeded with {prov}/key[{key_idx}]/{model}"
                     logger.warning(msg)
-                    errors.append({
-                        "agent": agent_key, "provider": prov, "model": model,
-                        "stage": "fallback", "message": msg, "severity": "warning"
-                    })
+                    errors.append(
+                        {
+                            "agent": agent_key,
+                            "provider": prov,
+                            "model": model,
+                            "stage": "fallback",
+                            "message": msg,
+                            "severity": "warning",
+                        }
+                    )
 
-                valid_ratio = valid_count / len(PARAMETER_SCHEMA) if PARAMETER_SCHEMA else 1.0
+                valid_ratio = (
+                    valid_count / len(PARAMETER_SCHEMA) if PARAMETER_SCHEMA else 1.0
+                )
                 raw_confidence = float(params.get("confidence", 0.7))
 
                 return {
@@ -588,23 +656,34 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
                     "confidence": min(1.0, max(0.0, raw_confidence)),
                     "valid_param_ratio": valid_ratio,
                     **clamped,
-                    "deliberation_minutes": params.get("deliberation_minutes", "No minutes provided."),
+                    "deliberation_minutes": params.get(
+                        "deliberation_minutes", "No minutes provided."
+                    ),
                     "rationale": params.get("rationale", f"Agent {agent_key} analysis"),
                     "section_overrides": params.get("section_overrides", []),
                     "errors": errors,
-                    "token_usage": token_usage
+                    "token_usage": token_usage,
                 }
 
             except Exception as e:
                 msg = str(e)
-                is_last = (attempt_idx == len(attempts_plan) - 1) and (key_idx == key_pool_size - 1)
+                is_last = (attempt_idx == len(attempts_plan) - 1) and (
+                    key_idx == key_pool_size - 1
+                )
                 severity = "error" if is_last else "warning"
-                errors.append({
-                    "agent": agent_key, "provider": prov, "model": model,
-                    "stage": "api_call", "message": f"key[{key_idx}] {msg}",
-                    "severity": severity
-                })
-                logger.warning(f"Agent {agent_key} {prov}/key[{key_idx}]/{model} failed: {e}")
+                errors.append(
+                    {
+                        "agent": agent_key,
+                        "provider": prov,
+                        "model": model,
+                        "stage": "api_call",
+                        "message": f"key[{key_idx}] {msg}",
+                        "severity": severity,
+                    }
+                )
+                logger.warning(
+                    f"Agent {agent_key} {prov}/key[{key_idx}]/{model} failed: {e}"
+                )
 
     default_op = _default_opinion(agent_key)
     default_op["errors"] = errors
@@ -612,7 +691,9 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
     return default_op
 
 
-async def _call_openai(model: str, system_prompt: str, user_prompt: str, key_index: int = 0) -> tuple[str, dict]:
+async def _call_openai(
+    model: str, system_prompt: str, user_prompt: str, key_index: int = 0
+) -> tuple[str, dict]:
     """Call OpenAI API and return raw JSON text, along with token usage."""
     client = _get_openai_client(key_index)
 
@@ -626,17 +707,23 @@ async def _call_openai(model: str, system_prompt: str, user_prompt: str, key_ind
             response_format={"type": "json_object"},
             temperature=0.3,
         )
-        usage = {
-            "prompt_tokens": response.usage.prompt_tokens,
-            "completion_tokens": response.usage.completion_tokens,
-            "total_tokens": response.usage.total_tokens
-        } if getattr(response, 'usage', None) else {}
+        usage = (
+            {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+            if getattr(response, "usage", None)
+            else {}
+        )
         return response.choices[0].message.content, usage
 
     return await asyncio.to_thread(_sync_call)
 
 
-async def _call_anthropic(model: str, system_prompt: str, user_prompt: str, key_index: int = 0) -> tuple[str, dict]:
+async def _call_anthropic(
+    model: str, system_prompt: str, user_prompt: str, key_index: int = 0
+) -> tuple[str, dict]:
     """Call Anthropic API and return raw JSON text, along with token usage."""
     client = _get_anthropic_client(key_index)
 
@@ -647,20 +734,30 @@ async def _call_anthropic(model: str, system_prompt: str, user_prompt: str, key_
             max_tokens=4096,
             system=system_prompt,
             messages=[
-                {"role": "user", "content": user_prompt + "\n\nRespond with a JSON object only."},
+                {
+                    "role": "user",
+                    "content": user_prompt + "\n\nRespond with a JSON object only.",
+                },
             ],
         )
-        usage = {
-            "prompt_tokens": response.usage.input_tokens,
-            "completion_tokens": response.usage.output_tokens,
-            "total_tokens": response.usage.input_tokens + response.usage.output_tokens
-        } if getattr(response, 'usage', None) else {}
+        usage = (
+            {
+                "prompt_tokens": response.usage.input_tokens,
+                "completion_tokens": response.usage.output_tokens,
+                "total_tokens": response.usage.input_tokens
+                + response.usage.output_tokens,
+            }
+            if getattr(response, "usage", None)
+            else {}
+        )
         return response.content[0].text, usage
 
     return await asyncio.to_thread(_sync_call)
 
 
-async def _call_google(model: str, system_prompt: str, user_prompt: str, key_index: int = 0) -> tuple[str, dict]:
+async def _call_google(
+    model: str, system_prompt: str, user_prompt: str, key_index: int = 0
+) -> tuple[str, dict]:
     """Call Google Gemini API and return raw JSON text, along with token usage."""
     client = _get_google_client(key_index)
 
@@ -678,12 +775,12 @@ async def _call_google(model: str, system_prompt: str, user_prompt: str, key_ind
     response = await asyncio.to_thread(_sync_call)
     usage = {}
     try:
-        um = getattr(response, 'usage_metadata', None)
+        um = getattr(response, "usage_metadata", None)
         if um:
             usage = {
-                "prompt_tokens": getattr(um, 'prompt_token_count', 0),
-                "completion_tokens": getattr(um, 'candidates_token_count', 0),
-                "total_tokens": getattr(um, 'total_token_count', 0)
+                "prompt_tokens": getattr(um, "prompt_token_count", 0),
+                "completion_tokens": getattr(um, "candidates_token_count", 0),
+                "total_tokens": getattr(um, "total_token_count", 0),
             }
     except Exception:
         pass  # SDK version mismatch — gracefully degrade
@@ -702,14 +799,13 @@ def _default_opinion(agent_key: str) -> dict:
         "latency_ms": 0,
         "parse_status": "default",
         "raw_response_size": 0,
-        "confidence": 0.0,          # Zero — no analysis was performed
+        "confidence": 0.0,  # Zero — no analysis was performed
         "valid_param_ratio": 0.0,  # Zero — no valid parameters from AI
         **defaults,
         "deliberation_minutes": "No minutes generated due to fallback.",
         "rationale": f"Default safe parameters (agent {agent_key} did not respond)",
         "section_overrides": [],
     }
-
 
 
 def _weighted_median_merge(opinions: Sequence[dict]) -> dict:
@@ -734,15 +830,17 @@ def _weighted_median_merge(opinions: Sequence[dict]) -> dict:
         weights = []
         for op in opinions:
             values.append(float(op.get(key, default_v)))
-            
+
             conf = float(op.get("confidence", 0.5))
             valid_ratio = float(op.get("valid_param_ratio", 1.0))
-            
-            parse_multiplier = 1.0  # JSON format quality does not affect artistic weight
-            
+
+            parse_multiplier = (
+                1.0  # JSON format quality does not affect artistic weight
+            )
+
             effective_weight = conf * max(0.25, valid_ratio) * parse_multiplier
             weights.append(effective_weight)
-            
+
         total_weight = sum(weights) + 1e-6
 
         is_boolean = min_v == 0 and max_v == 1 and isinstance(default_v, int)
@@ -770,7 +868,9 @@ def _weighted_median_merge(opinions: Sequence[dict]) -> dict:
     override_votes: dict[str, dict[str, list[tuple[float, float]]]] = {}
 
     for op in opinions:
-        weight = float(op.get("confidence", 0.5)) * max(0.25, float(op.get("valid_param_ratio", 1.0)))
+        weight = float(op.get("confidence", 0.5)) * max(
+            0.25, float(op.get("valid_param_ratio", 1.0))
+        )
         for override in op.get("section_overrides", []):
             sec_id = override.get("section_id")
             if not sec_id:
@@ -799,12 +899,20 @@ def _weighted_median_merge(opinions: Sequence[dict]) -> dict:
                 if cum >= tot_w / 2:
                     med = val
                     break
-            sec_result[k] = round(max(PARAMETER_SCHEMA[k]["min"], min(PARAMETER_SCHEMA[k]["max"], med)), 4)
+            sec_result[k] = round(
+                max(PARAMETER_SCHEMA[k]["min"], min(PARAMETER_SCHEMA[k]["max"], med)), 4
+            )
 
         if len(sec_result) > 1:
             final_overrides.append(sec_result)
 
-    final_overrides.sort(key=lambda x: int(re.search(r'\d+', x["section_id"]).group()) if re.search(r'\d+', x["section_id"]) else 0)
+    final_overrides.sort(
+        key=lambda x: (
+            int(re.search(r"\d+", x["section_id"]).group())
+            if re.search(r"\d+", x["section_id"])
+            else 0
+        )
+    )
     adopted["section_overrides"] = final_overrides
 
     return adopted
@@ -814,63 +922,141 @@ def _calculate_deliberation_score(opinions: Sequence[dict]) -> dict:
     """Decompose agreement into categories for experimental logs."""
     if len(opinions) < 2:
         return {
-            "global": 1.0, "dynamics": 1.0, "tone": 1.0, "stereo": 1.0, "saturation": 1.0
+            "global": 1.0,
+            "dynamics": 1.0,
+            "tone": 1.0,
+            "stereo": 1.0,
+            "saturation": 1.0,
         }
 
     categories = {
-        "dynamics": ["comp_threshold_db", "comp_ratio", "comp_attack_sec", "comp_release_sec", "limiter_ceil_db", "input_gain_db"],
-        "tone": ["eq_low_shelf_gain_db", "eq_low_mid_gain_db", "eq_high_mid_gain_db", "eq_high_shelf_gain_db", "dyn_eq_enabled"],
-        "stereo": ["ms_side_high_gain_db", "ms_mid_low_gain_db", "stereo_low_mono", "stereo_high_wide", "stereo_width"],
-        "saturation": ["transformer_saturation", "transformer_mix", "triode_drive", "triode_bias", "triode_mix", "tape_saturation", "tape_mix", "parallel_wet"]
+        "dynamics": [
+            "comp_threshold_db",
+            "comp_ratio",
+            "comp_attack_sec",
+            "comp_release_sec",
+            "limiter_ceil_db",
+            "input_gain_db",
+        ],
+        "tone": [
+            "eq_low_shelf_gain_db",
+            "eq_low_mid_gain_db",
+            "eq_high_mid_gain_db",
+            "eq_high_shelf_gain_db",
+            "dyn_eq_enabled",
+        ],
+        "stereo": [
+            "ms_side_high_gain_db",
+            "ms_mid_low_gain_db",
+            "stereo_low_mono",
+            "stereo_high_wide",
+            "stereo_width",
+        ],
+        "saturation": [
+            "transformer_saturation",
+            "transformer_mix",
+            "triode_drive",
+            "triode_bias",
+            "triode_mix",
+            "tape_saturation",
+            "tape_mix",
+            "parallel_wet",
+        ],
     }
-    
+
     agreements = {}
     total_agreements = []
-    
+
     for cat_name, keys in categories.items():
         cat_agreements = []
         for key in keys:
-            if key not in PARAMETER_SCHEMA: continue
+            if key not in PARAMETER_SCHEMA:
+                continue
             values = [op.get(key, 0) for op in opinions]
             schema = PARAMETER_SCHEMA[key]
             param_range = schema["max"] - schema["min"]
-            if param_range == 0: continue
-            
+            if param_range == 0:
+                continue
+
             spread = max(values) - min(values)
             agreement = max(0.0, 1.0 - (spread / param_range))
             cat_agreements.append(agreement)
             total_agreements.append(agreement)
-            
-        agreements[cat_name] = round(sum(cat_agreements) / len(cat_agreements), 3) if cat_agreements else 0.5
-        
-    agreements["global"] = round(sum(total_agreements) / len(total_agreements), 3) if total_agreements else 0.5
+
+        agreements[cat_name] = (
+            round(sum(cat_agreements) / len(cat_agreements), 3)
+            if cat_agreements
+            else 0.5
+        )
+
+    agreements["global"] = (
+        round(sum(total_agreements) / len(total_agreements), 3)
+        if total_agreements
+        else 0.5
+    )
     return agreements
 
 
 def _get_12_agents_personas() -> dict:
-    """"12 Specialist Agent" Configuration - High resolution parameter negotiation"""
+    """ "12 Specialist Agent" Configuration - High resolution parameter negotiation"""
     themes = [
-        ("High-Frequency Specialist", "Focus purely on high-frequency transient enhancement, airiness, and high-shelf EQ management."),
-        ("Sub-Bass Specialist", "Focus strictly on sub-bass stability. Prevent phase issues below 120Hz. Advocate for low-end monoization."),
-        ("Mid-Range Specialist", "Focus on the mid-range flow, stereo width in the body of the track, and vocal/lead continuity."),
-        ("Harmonic Saturation Specialist", "Focus on tube distortion, punch, and clipping. Push triode drive and aggressive harmonic generation safely."),
-        ("Acoustic Space Specialist", "Focus on acoustic space, reverb tails, and dynamic range preservation. Advocate for minimal compression ratios."),
-        ("Transient Specialist", "Focus on transient attack times and True Peak limiting. Fast processing, precise compression attacks."),
-        ("Warmth Specialist", "Focus on low-mid warmth and tape saturation to provide thickness and organic density."),
-        ("Stereo Imaging Specialist", "Focus entirely on the stereo side channels, evaluating ethereal wideness and mid-side balance."),
-        ("Loudness/Center Specialist", "Focus on integrated loudness and center channel authority. Dictate overall LUFS gain unconditionally."),
-        ("Dynamic EQ Specialist", "Focus on surgical dynamic EQ and harshness removal, specifically in the 3kHz-5kHz range."),
-        ("Parallel Processing Specialist", "Focus on parallel processing (parallel_wet). Recommend hidden compression and saturation without affecting the dry transients."),
-        ("Standards & Compliance Specialist", "Final arbiter of BS.1770-4 compliance. Verify target LUFS and True Peak limits.")
+        (
+            "High-Frequency Specialist",
+            "Focus purely on high-frequency transient enhancement, airiness, and high-shelf EQ management.",
+        ),
+        (
+            "Sub-Bass Specialist",
+            "Focus strictly on sub-bass stability. Prevent phase issues below 120Hz. Advocate for low-end monoization.",
+        ),
+        (
+            "Mid-Range Specialist",
+            "Focus on the mid-range flow, stereo width in the body of the track, and vocal/lead continuity.",
+        ),
+        (
+            "Harmonic Saturation Specialist",
+            "Focus on tube distortion, punch, and clipping. Push triode drive and aggressive harmonic generation safely.",
+        ),
+        (
+            "Acoustic Space Specialist",
+            "Focus on acoustic space, reverb tails, and dynamic range preservation. Advocate for minimal compression ratios.",
+        ),
+        (
+            "Transient Specialist",
+            "Focus on transient attack times and True Peak limiting. Fast processing, precise compression attacks.",
+        ),
+        (
+            "Warmth Specialist",
+            "Focus on low-mid warmth and tape saturation to provide thickness and organic density.",
+        ),
+        (
+            "Stereo Imaging Specialist",
+            "Focus entirely on the stereo side channels, evaluating ethereal wideness and mid-side balance.",
+        ),
+        (
+            "Loudness/Center Specialist",
+            "Focus on integrated loudness and center channel authority. Dictate overall LUFS gain unconditionally.",
+        ),
+        (
+            "Dynamic EQ Specialist",
+            "Focus on surgical dynamic EQ and harshness removal, specifically in the 3kHz-5kHz range.",
+        ),
+        (
+            "Parallel Processing Specialist",
+            "Focus on parallel processing (parallel_wet). Recommend hidden compression and saturation without affecting the dry transients.",
+        ),
+        (
+            "Standards & Compliance Specialist",
+            "Final arbiter of BS.1770-4 compliance. Verify target LUFS and True Peak limits.",
+        ),
     ]
-    
+
     # Each provider has primary + same-provider fallback (D-09 fix)
     providers = [
         ("openai", "gpt-5.4", "gpt-5.2"),
         ("anthropic", "claude-opus-4-6", "claude-sonnet-4-6"),
-        ("google", "gemini-3.1-pro-preview", "gemini-3-flash-preview")
+        ("google", "gemini-3.1-pro-preview", "gemini-3-flash-preview"),
     ]
-    
+
     personas = {}
     for i, (name, prompt) in enumerate(themes):
         prov, mod, fallback = providers[i % 3]
@@ -879,7 +1065,7 @@ def _get_12_agents_personas() -> dict:
             "provider": prov,
             "model": mod,
             "fallback_model": fallback,
-            "system_prompt": f"You are the {name}. {prompt} Propose mastering parameters based entirely on your domain while respecting physical signal limits."
+            "system_prompt": f"You are the {name}. {prompt} Propose mastering parameters based entirely on your domain while respecting physical signal limits.",
         }
     return personas
 
@@ -893,27 +1079,27 @@ def _get_ts_envelope_personas() -> dict:
             "provider": "google",
             "model": default_model,
             "fallback_model": "gemini-3-flash-preview",
-            "system_prompt": "You are the master of the Attack phase. You analyze the first 0-15ms of every percussive hit. You demand precise compressor attacks and high True Peak safety."
+            "system_prompt": "You are the master of the Attack phase. You analyze the first 0-15ms of every percussive hit. You demand precise compressor attacks and high True Peak safety.",
         },
         "sustain_analyst": {
             "name": "Sustain Analyst",
             "provider": "google",
             "model": default_model,
             "fallback_model": "gemini-3-flash-preview",
-            "system_prompt": "You govern the body of the sound (15ms-200ms). You demand parallel saturation, Triode drive, and Tape warmth to thicken the sustain."
+            "system_prompt": "You govern the body of the sound (15ms-200ms). You demand parallel saturation, Triode drive, and Tape warmth to thicken the sustain.",
         },
         "release_analyst": {
             "name": "Release Analyst",
             "provider": "google",
             "model": default_model,
             "fallback_model": "gemini-3-flash-preview",
-            "system_prompt": "You only care about how signals fade. You dictate the breathing of the mix. You demand correct release times on the compressor to match the BPM groove."
+            "system_prompt": "You only care about how signals fade. You dictate the breathing of the mix. You demand correct release times on the compressor to match the BPM groove.",
         },
         "macro_dynamic_analyst": {
             "name": "MacroDynamics Analyst",
             "provider": "google",
             "model": default_model,
             "fallback_model": "gemini-3-flash-preview",
-            "system_prompt": "You look at the song globally. You manage long-term Integrated LUFS, target dynamic EQ, and ensure the song dynamically grows across sections."
-        }
+            "system_prompt": "You look at the song globally. You manage long-term Integrated LUFS, target dynamic EQ, and ensure the song dynamically grows across sections.",
+        },
     }
