@@ -340,14 +340,18 @@ def _build_analysis_prompt(
         strategy = formplan.get("global_mastering_strategy", {})
         sections = formplan.get("macro_form", {}).get("sections", [])
 
-        return f"""## Formplan-Guided RENDITION_DSP Parameter Selection (DANCE MUSIC SPECIALIST)
+        detected_genre = track_id.get('genre', 'Unknown')
+        detected_mood = track_id.get('mood', 'Unknown')
+
+        return f"""## Formplan-Guided RENDITION_DSP Parameter Selection
 
 ### Domain
-This is a **DANCE MUSIC** mastering session. All tracks are electronic dance music (EDM, House, Techno, DnB, Trance, Bass Music, or related subgenres). Optimize for club sound systems, festival PAs, and streaming platforms.
+Detected Genre: **{detected_genre}** | Mood: **{detected_mood}**
+You are mastering this track to compete with the **current global chart Top 10** in the {detected_genre} genre. Study what makes the best {detected_genre} masters in the world sound extraordinary — the depth, punch, width, clarity, and emotional impact — and replicate that level of craftsmanship for THIS track.
 
 ### Target
 - Platform: {platform}
-- **YOU MUST DECIDE the optimal target LUFS and target True Peak for this specific track.** Include `"recommended_target_lufs"` (float) and `"recommended_target_true_peak"` (float, in dBTP) in your JSON response. Base your decision on the track's genre, dynamics, and energy level. Do NOT default to -14.0 LUFS blindly — consider what is optimal for THIS track on THIS platform in the context of competitive dance music mastering.
+- **YOU MUST DECIDE the optimal target LUFS and target True Peak for this specific track.** Include `"recommended_target_lufs"` (float) and `"recommended_target_true_peak"` (float, in dBTP) in your JSON response. Base your decision on what the TOP MASTERING ENGINEERS in {detected_genre} would choose for this specific track's dynamics, energy, and intended listening context.
 
 ### Track Identity
 {json.dumps(track_id, indent=2)}
@@ -376,42 +380,51 @@ This is a **DANCE MUSIC** mastering session. All tracks are electronic dance mus
 ---
 
 ### MASTERING PHILOSOPHY
-**Push to the absolute limit.** For every parameter, consider its full min-to-max range and find the OPTIMAL POINT just before it breaks — the sweet spot right at the edge of distortion, where the track sounds its most powerful, punchy, and alive WITHOUT crossing into audible degradation. Do NOT play it safe with conservative defaults. The goal is the MAXIMUM ACHIEVABLE QUALITY for this specific track, not a generic middle-ground. If the signal can handle more saturation, push it. If the limiter can go harder without audible pumping, push it. Every parameter should be justified as "this is the highest I can go before it degrades."
+You are a world-class mastering engineer whose work regularly places in the **Billboard / Spotify / Apple Music Top 10** for {detected_genre}. Your mastering is renowned for its **繊細さ (delicacy)** — the ability to maximize sonic impact through precise, nuanced parameter choices rather than brute force.
+
+For EVERY parameter:
+1. Consider the track's unique sonic fingerprint — its transients, harmonics, spatial characteristics
+2. Find the **optimal point** that maximizes the track's emotional impact and competitive loudness
+3. Shape EQ frequencies and Q values **specifically for this track's spectral content** — never use generic center frequencies
+4. Apply **dynamic, section-by-section automation** that breathes with the music's structure
+5. Every choice must be justified as: "This is what a Grammy-winning {detected_genre} master sounds like"
+
+Do NOT play it safe. Do NOT use generic defaults. Every parameter must reflect deep listening and intentional sonic design.
 
 Based on this formplan, propose optimal RENDITION_DSP parameters.
 The formplan targets tell you WHAT to achieve. You decide HOW via RENDITION_DSP params.
 
-**SECTION-BY-SECTION EQ STRATEGY**: Delicately shape the overall frequency response by prioritizing negative band cuts (subtractive EQ). Avoid boosting; instead, finely carve out problematic or masking frequencies. YOU MUST apply this dynamically on a PER-SECTION basis using `section_overrides`, tailoring the cuts to the specific instrumentation and energy of each section.
+**SECTION-BY-SECTION DYNAMIC MASTERING**: Each section demands unique treatment. Drops need different EQ/compression than verses. Breakdowns need different stereo width than buildups. YOU MUST apply per-section automation via `section_overrides`, including per-section EQ frequencies, compression settings, saturation amounts, and stereo imaging.
 
 Respond with a JSON object containing ALL parameters listed below.
 
-v2 RENDITION_DSP parameters:
-- transformer_saturation (0-1.0): Odd harmonic saturation amount
-- transformer_mix (0-1.0): Transformer wet/dry blend
-- triode_drive (0-1.0): Tube saturation input level
-- triode_bias (-2.0 to 0.0): Grid bias. -2.0=warm, -1.2=balanced, -0.5=aggressive
-- triode_mix (0-1.0): Tube wet/dry blend
-- tape_saturation (0-1.0): Tape compression + head bump amount
-- tape_mix (0-1.0): Tape wet/dry blend
-- dyn_eq_enabled (0 or 1): Frequency-selective dynamic EQ
-- stereo_low_mono (0-1): Low-end monoization below 200Hz
-- stereo_high_wide (0.8-1.5): High-frequency widening above 4kHz
-- stereo_width (0.8-1.3): Global stereo width multiplier
-- parallel_wet (0-0.5): Parallel saturation wet amount
+Full RENDITION_DSP parameters (YOU MUST specify ALL of these):
+- input_gain_db (-6 to 12): Input gain adjustment
+- eq_low_shelf_gain_db (-6 to 6), eq_low_shelf_freq (30-200): Low shelf EQ
+- eq_low_mid_gain_db (-6 to 6), eq_low_mid_freq (100-1000), eq_low_mid_q (0.3-5.0): Low-mid parametric EQ
+- eq_high_mid_gain_db (-6 to 6), eq_high_mid_freq (1000-8000), eq_high_mid_q (0.3-5.0): High-mid parametric EQ
+- eq_high_shelf_gain_db (-6 to 6), eq_high_shelf_freq (5000-18000): High shelf EQ
+- ms_side_high_gain_db (-3 to 3), ms_mid_low_gain_db (-3 to 3): M/S balance
+- comp_threshold_db (-24 to 0), comp_ratio (1.0-6.0): Compressor
+- comp_attack_sec (0.001-0.1), comp_release_sec (0.05-0.5), comp_makeup_db (0-12): Compressor timing/makeup
+- limiter_ceil_db (-0.3 to -0.1), limiter_release_ms (10-200): Limiter
+- transformer_saturation (0-1.0), transformer_mix (0-1.0): Transformer saturation
+- triode_drive (0-1.0), triode_bias (-2.0 to 0.0), triode_mix (0-1.0): Tube saturation
+- tape_saturation (0-1.0), tape_mix (0-1.0), tape_speed (7.5-30.0): Tape saturation
+- dyn_eq_enabled (0 or 1): Dynamic EQ
+- stereo_low_mono (0-1.0), stereo_high_wide (0.8-1.5), stereo_width (0.8-1.3): Stereo imaging
+- parallel_wet (0-0.5), parallel_drive (0-5.0): Parallel processing
 
-**CRITICAL**: The `Parameter Guardrails` section contains constraints derived from the actual signal measurements by the upstream analysis AI. You MUST respect these constraints. They override the ranges above.
-
-Also include all v1 parameters (input_gain_db through limiter_ceil_db).
+**CRITICAL**: The `Parameter Guardrails` section contains constraints derived from the actual signal measurements by the upstream analysis AI. You MUST respect these constraints.
 
 Additionally include:
-- **\"recommended_target_lufs\"** (float, REQUIRED): Your recommended integrated loudness target for this specific track (e.g. -9.0 to -16.0). YOU MUST include this.
-- **\"recommended_target_true_peak\"** (float, dBTP, REQUIRED): Your recommended true peak ceiling for this specific track (e.g. -0.1 to -1.0). YOU MUST include this.
-- A "deliberation_minutes" string (minimum 400 characters) containing the detailed meeting minutes (議事録) and step-by-step reasoning for the chosen parameters. YOU MUST OUTPUT THIS.
+- **\"recommended_target_lufs\"** (float, REQUIRED): The loudness target that would make this track competitive in the {detected_genre} Top 10.
+- **\"recommended_target_true_peak\"** (float, dBTP, REQUIRED): The true peak ceiling optimal for this track's transient character.
+- A "deliberation_minutes" string (minimum 400 characters) containing detailed meeting minutes (議事録).
 - A "rationale" string (minimum 200 characters) summarizing your reasoning.
-- A "confidence" float (0-1) indicating your certainty
-- "section_overrides": An array of objects to automate parameters over time.
-  YOU MUST INCLUDE THIS ARRAY IF THE TRACK HAS MULTIPLE SECTIONS.
-  Format: [{{"section_id": "SEC_0_Intro", "stereo_width": 1.0}}, {{"section_id": "SEC_1_Drop", "comp_threshold_db": -16.0}}]
+- A "confidence" float (0-1)
+- "section_overrides": Per-section parameter automation. REQUIRED for multi-section tracks.
+  Format: [{{"section_id": "SEC_0_Intro", "stereo_width": 1.0, "eq_high_mid_freq": 2500}}, ...]
   Match "section_id" EXACTLY with the provided Sections.
   FAILURE TO PROVIDE section_overrides IS A CRITICAL ERROR.
 
@@ -420,14 +433,18 @@ Keep ALL parameters within these ranges:
 """
 
     # Legacy v1 format fallback
-    return f"""## Audio Analysis Report (DANCE MUSIC SPECIALIST)
+    detected_genre = track_id.get('genre', 'Unknown')
+    detected_mood = track_id.get('mood', 'Unknown')
+
+    return f"""## Audio Analysis Report — World-Class {detected_genre} Mastering
 
 ### Domain
-This is a **DANCE MUSIC** mastering session. All tracks are electronic dance music (EDM, House, Techno, DnB, Trance, Bass Music, or related subgenres). Optimize for club sound systems, festival PAs, and streaming platforms.
+Detected Genre: **{detected_genre}** | Mood: **{detected_mood}**
+You are mastering this track to compete with the **current global chart Top 10** in {detected_genre}. Your goal: a master so refined it is indistinguishable from the best commercial releases in this genre.
 
 ### Target
 - Platform: {platform}
-- **YOU MUST DECIDE the optimal target LUFS and target True Peak for this specific track.** Include `"recommended_target_lufs"` (float) and `"recommended_target_true_peak"` (float, in dBTP) in your JSON response. Base your decision on the track's genre, dynamics, and energy level.
+- **YOU MUST DECIDE the optimal target LUFS and target True Peak.** Base your decision on what the TOP MASTERING ENGINEERS in {detected_genre} would choose for this specific track.
 
 ### Track Identity
 {json.dumps(track_id, indent=2)}
@@ -450,43 +467,39 @@ This is a **DANCE MUSIC** mastering session. All tracks are electronic dance mus
 ---
 
 ### MASTERING PHILOSOPHY
-**Push to the absolute limit.** For every parameter, consider its full min-to-max range and find the OPTIMAL POINT just before it breaks — the sweet spot right at the edge of distortion, where the track sounds its most powerful, punchy, and alive WITHOUT crossing into audible degradation. Do NOT play it safe with conservative defaults. The goal is the MAXIMUM ACHIEVABLE QUALITY for this specific track, not a generic middle-ground.
+You are a world-class mastering engineer whose {detected_genre} masters regularly chart in the **Top 10 globally**. Your signature is **繊細な動的マスタリング (delicate dynamic mastering)** — achieving maximum sonic impact through precise, nuanced choices.
 
-Based on this analysis, propose optimal mastering parameters.
+For EVERY parameter:
+1. Analyze this track's unique spectral and dynamic fingerprint
+2. Choose EQ frequencies and Q values **specifically tuned to this track's content** — never generic
+3. Apply **section-by-section dynamic automation** that breathes with the music
+4. Every choice = "This is what a Grammy-winning {detected_genre} master sounds like"
 
-**SECTION-BY-SECTION EQ STRATEGY**: Delicately shape the overall frequency response by prioritizing negative band cuts (subtractive EQ). Avoid boosting; instead, finely carve out problematic or masking frequencies. YOU MUST apply this dynamically on a PER-SECTION basis using `section_overrides`, tailoring the cuts to the specific instrumentation and energy of each section.
+Respond with a JSON object containing ALL parameters.
 
-Respond with a JSON object containing ALL parameters listed below.
+Full RENDITION_DSP parameters (ALL required):
+- input_gain_db, eq_low_shelf_gain_db, eq_low_shelf_freq
+- eq_low_mid_gain_db, eq_low_mid_freq, eq_low_mid_q
+- eq_high_mid_gain_db, eq_high_mid_freq, eq_high_mid_q
+- eq_high_shelf_gain_db, eq_high_shelf_freq
+- ms_side_high_gain_db, ms_mid_low_gain_db
+- comp_threshold_db, comp_ratio, comp_attack_sec, comp_release_sec, comp_makeup_db
+- limiter_ceil_db, limiter_release_ms
+- transformer_saturation, transformer_mix
+- triode_drive, triode_bias, triode_mix
+- tape_saturation, tape_mix, tape_speed
+- dyn_eq_enabled, stereo_low_mono, stereo_high_wide, stereo_width
+- parallel_wet, parallel_drive
 
-v2 RENDITION_DSP parameters:
-- transformer_saturation (0-1.0): Odd harmonic saturation amount
-- transformer_mix (0-1.0): Transformer wet/dry blend
-- triode_drive (0-1.0): Tube saturation input level
-- triode_bias (-2.0 to 0.0): Grid bias. -2.0=warm, -1.2=balanced, -0.5=aggressive
-- triode_mix (0-1.0): Tube wet/dry blend
-- tape_saturation (0-1.0): Tape compression + head bump amount
-- tape_mix (0-1.0): Tape wet/dry blend
-- dyn_eq_enabled (0 or 1): Frequency-selective dynamic EQ
-- stereo_low_mono (0-1): Low-end monoization below 200Hz
-- stereo_high_wide (0.8-1.5): High-frequency widening above 4kHz
-- stereo_width (0.8-1.3): Global stereo width multiplier
-- parallel_wet (0-0.5): Parallel saturation wet amount
-
-**CRITICAL**: The `Parameter Guardrails` section contains constraints derived from the actual signal measurements by the upstream analysis AI. You MUST respect these constraints. They override the ranges above.
-
-Also include all v1 parameters (input_gain_db through limiter_ceil_db).
+**CRITICAL**: Respect Parameter Guardrails from signal analysis.
 
 Additionally include:
-- **"recommended_target_lufs"** (float, REQUIRED): Your recommended integrated loudness target for this specific track (e.g. -9.0 to -16.0). YOU MUST include this.
-- **"recommended_target_true_peak"** (float, dBTP, REQUIRED): Your recommended true peak ceiling for this specific track (e.g. -0.1 to -1.0). YOU MUST include this.
-- A "deliberation_minutes" string (minimum 400 characters) containing the detailed meeting minutes (議事録) and step-by-step reasoning for the chosen parameters. YOU MUST OUTPUT THIS.
-- A "rationale" string (minimum 200 characters) summarizing your reasoning.
-- A "confidence" float (0-1) indicating your certainty
-- "section_overrides": An array of objects to automate parameters over time.
-  YOU MUST INCLUDE THIS ARRAY IF THE TRACK HAS MULTIPLE SECTIONS.
-  Format: [{{"section_id": "SEC_0_Intro", "stereo_width": 1.0}}, {{"section_id": "SEC_1_Drop", "comp_threshold_db": -16.0}}]
-  Match "section_id" EXACTLY with the provided Sections.
-  FAILURE TO PROVIDE section_overrides IS A CRITICAL ERROR.
+- **"recommended_target_lufs"** (float, REQUIRED): Competitive loudness for {detected_genre} Top 10.
+- **"recommended_target_true_peak"** (float, dBTP, REQUIRED): Optimal ceiling for this track.
+- "deliberation_minutes" (string, min 400 chars): Detailed reasoning.
+- "rationale" (string, min 200 chars)
+- "confidence" (float, 0-1)
+- "section_overrides": Per-section automation. REQUIRED for multi-section tracks.
 
 Keep ALL parameters within these ranges:
 {json.dumps({k: {"min": v["min"], "max": v["max"]} for k, v in PARAMETER_SCHEMA.items()}, indent=2)}
