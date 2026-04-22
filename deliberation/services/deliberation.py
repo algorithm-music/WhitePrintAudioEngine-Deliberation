@@ -149,8 +149,8 @@ PARAMETER_SCHEMA = {
     "input_gain_db": {"min": -6, "max": 12, "default": 0},
     # Broad EQ bands: ±6dB max. Mastering shouldn't require beyond 6dB of broadband EQ. If more is needed, the mix itself is fatally flawed.
     "eq_low_shelf_gain_db": {"min": -6, "max": 6, "default": 0},
-    # Low-mid EQ: ±3dB max. This range is the primary cause of "muddiness" when boosted aggressively.
-    "eq_low_mid_gain_db": {"min": -3, "max": 3, "default": 0},
+    # Low-mid EQ: ±6dB hardware range. Audition's param_constraints will tighten this dynamically when mud_risk is detected.
+    "eq_low_mid_gain_db": {"min": -6, "max": 6, "default": 0},
     "eq_high_mid_gain_db": {"min": -6, "max": 6, "default": 0},
     "eq_high_shelf_gain_db": {"min": -6, "max": 6, "default": 0},
     # Mid/Side gain: ±3dB max. Radical M/S changes (>3dB) destroy phase correlation and collapse mono compatibility.
@@ -167,20 +167,17 @@ PARAMETER_SCHEMA = {
     # True Peak Limiter Ceiling: -0.1dBTP minimum safety margin (ITU-R BS.1770), -0.3dBTP is safer for lossy codec transcoding (Spotify/Apple).
     "limiter_ceil_db": {"min": -0.3, "max": -0.1, "default": -0.1},
     # ── v2 Parameters (Analog Modeling & Spatial) ──
-    # Transformer magnetic saturation: 0.6 max prevents iron core full saturation (hard clipping region > 0.6).
-    "transformer_saturation": {"min": 0, "max": 0.6, "default": 0.0},
-    # Transformer mix: 0.6 max ensures at least 40% dry signal preserving transient clarity.
-    "transformer_mix": {"min": 0, "max": 0.6, "default": 0.0},
-    # Vacuum tube triode stage: 0.6 max avoids grid-current clipping region.
-    "triode_drive": {"min": 0, "max": 0.6, "default": 0.0},
-    # Triode grid bias: -2.0V operates in the warm linear region, 0.0V pushes grid-current limiting (more aggressive harmonics).
+    # Transformer magnetic saturation: full DSP range. Audition will constrain dynamically based on true_peak/crest measurements.
+    "transformer_saturation": {"min": 0, "max": 1.0, "default": 0.0},
+    "transformer_mix": {"min": 0, "max": 1.0, "default": 0.0},
+    # Vacuum tube triode stage: full DSP range.
+    "triode_drive": {"min": 0, "max": 1.0, "default": 0.0},
+    # Triode grid bias: -2.0V operates in the warm linear region, 0.0V pushes grid-current limiting.
     "triode_bias": {"min": -2.0, "max": 0.0, "default": -1.2},
-    # Triode mix: 0.6 max ensures at least 40% dry signal preserving transient clarity.
-    "triode_mix": {"min": 0, "max": 0.6, "default": 0.0},
-    # Tape saturation model: 0.6 max prevents high-frequency erasure and low-end muddiness.
-    "tape_saturation": {"min": 0, "max": 0.6, "default": 0.0},
-    # Tape mix: 0.6 max ensures at least 40% dry signal.
-    "tape_mix": {"min": 0, "max": 0.6, "default": 0.0},
+    "triode_mix": {"min": 0, "max": 1.0, "default": 0.0},
+    # Tape saturation model: full DSP range.
+    "tape_saturation": {"min": 0, "max": 1.0, "default": 0.0},
+    "tape_mix": {"min": 0, "max": 1.0, "default": 0.0},
     # Dynamic EQ switch: 0 (Off) or 1 (On). Used to automatically tame harsh resonances.
     "dyn_eq_enabled": {"min": 0, "max": 1, "default": 0},
     # Low-end monoization (Elliptical EQ below 200Hz): >0.8 ensures club subwoofer compatibility, 1.0 is full mono. Min 0 allows complete bypass.
@@ -189,8 +186,8 @@ PARAMETER_SCHEMA = {
     # Width processing: 1.5 max for high bands (Haas shimmer limit), 1.3 max for global width (avoids mono-canceling phase issues).
     "stereo_high_wide": {"min": 0.8, "max": 1.5, "default": 1.15},
     "stereo_width": {"min": 0.8, "max": 1.3, "default": 1.0},
-    # Parallel saturation mix: 0.25 max. Above 25% the saturated parallel bus overpowers the dry transient signal.
-    "parallel_wet": {"min": 0, "max": 0.25, "default": 0.0},
+    # Parallel saturation mix: full DSP range. Audition will constrain based on mud_risk/crest measurements.
+    "parallel_wet": {"min": 0, "max": 0.5, "default": 0.0},
 }
 
 
@@ -242,7 +239,7 @@ async def run_triadic_deliberation(
     opinions = await asyncio.gather(*tasks)
 
     # Deterministic weighted median merge (replaces deprecated Nash product)
-    adopted = _weighted_median_merge(opinions)
+    adopted = _weighted_median_merge(opinions, analysis_data)
 
     # Deliberation score (Category-decomposed agreement level)
     deliberation_scores = _calculate_deliberation_score(opinions)
@@ -374,18 +371,20 @@ The formplan targets tell you WHAT to achieve. You decide HOW via RENDITION_DSP 
 Respond with a JSON object containing ALL parameters listed below.
 
 v2 RENDITION_DSP parameters:
-- transformer_saturation (0-0.6): Odd harmonic saturation amount
-- transformer_mix (0-0.6): Transformer wet/dry blend
-- triode_drive (0-0.6): Tube saturation input level
+- transformer_saturation (0-1.0): Odd harmonic saturation amount
+- transformer_mix (0-1.0): Transformer wet/dry blend
+- triode_drive (0-1.0): Tube saturation input level
 - triode_bias (-2.0 to 0.0): Grid bias. -2.0=warm, -1.2=balanced, -0.5=aggressive
-- triode_mix (0-0.6): Tube wet/dry blend
-- tape_saturation (0-0.6): Tape compression + head bump amount
-- tape_mix (0-0.6): Tape wet/dry blend
+- triode_mix (0-1.0): Tube wet/dry blend
+- tape_saturation (0-1.0): Tape compression + head bump amount
+- tape_mix (0-1.0): Tape wet/dry blend
 - dyn_eq_enabled (0 or 1): Frequency-selective dynamic EQ
 - stereo_low_mono (0-1): Low-end monoization below 200Hz
 - stereo_high_wide (0.8-1.5): High-frequency widening above 4kHz
 - stereo_width (0.8-1.3): Global stereo width multiplier
-- parallel_wet (0-0.25): Parallel saturation wet amount
+- parallel_wet (0-0.5): Parallel saturation wet amount
+
+**CRITICAL**: The `Detected Problems` section contains `param_constraints` derived from the actual signal measurements. You MUST respect these constraints. They override the ranges above.
 
 Also include all v1 parameters (input_gain_db through limiter_ceil_db).
 
@@ -435,18 +434,20 @@ Based on this analysis, propose optimal mastering parameters.
 Respond with a JSON object containing ALL parameters listed below.
 
 v2 RENDITION_DSP parameters:
-- transformer_saturation (0-0.6): Odd harmonic saturation amount
-- transformer_mix (0-0.6): Transformer wet/dry blend
-- triode_drive (0-0.6): Tube saturation input level
+- transformer_saturation (0-1.0): Odd harmonic saturation amount
+- transformer_mix (0-1.0): Transformer wet/dry blend
+- triode_drive (0-1.0): Tube saturation input level
 - triode_bias (-2.0 to 0.0): Grid bias. -2.0=warm, -1.2=balanced, -0.5=aggressive
-- triode_mix (0-0.6): Tube wet/dry blend
-- tape_saturation (0-0.6): Tape compression + head bump amount
-- tape_mix (0-0.6): Tape wet/dry blend
+- triode_mix (0-1.0): Tube wet/dry blend
+- tape_saturation (0-1.0): Tape compression + head bump amount
+- tape_mix (0-1.0): Tape wet/dry blend
 - dyn_eq_enabled (0 or 1): Frequency-selective dynamic EQ
 - stereo_low_mono (0-1): Low-end monoization below 200Hz
 - stereo_high_wide (0.8-1.5): High-frequency widening above 4kHz
 - stereo_width (0.8-1.3): Global stereo width multiplier
-- parallel_wet (0-0.25): Parallel saturation wet amount
+- parallel_wet (0-0.5): Parallel saturation wet amount
+
+**CRITICAL**: The `Detected Problems` section contains `param_constraints` derived from the actual signal measurements. You MUST respect these constraints. They override the ranges above.
 
 Also include all v1 parameters (input_gain_db through limiter_ceil_db).
 
@@ -813,7 +814,7 @@ def _default_opinion(agent_key: str) -> dict:
     }
 
 
-def _weighted_median_merge(opinions: Sequence[dict]) -> dict:
+def _weighted_median_merge(opinions: Sequence[dict], analysis_data: dict = None) -> dict:
     """
     Deterministic weighted median merge for parameter adoption.
     Consistent with merge_rule.py's merge logic.
@@ -920,86 +921,96 @@ def _weighted_median_merge(opinions: Sequence[dict]) -> dict:
     )
     adopted["section_overrides"] = final_overrides
 
-    # Apply safety guardrails to prevent muddy/distorted combinations
-    adopted = _apply_safety_guardrails(adopted)
+    # Apply signal-measured constraints from Audition's detected_problems
+    adopted = _apply_measured_constraints(adopted, analysis_data)
 
     return adopted
 
 
-def _apply_safety_guardrails(params: dict) -> dict:
-    """Post-merge safety guardrails to prevent problematic parameter combinations.
+def _apply_measured_constraints(params: dict, analysis_data: dict) -> dict:
+    """Apply parameter constraints generated by Vertex AI in Audition.
 
-    Rules:
-      1. Low-mid boost + parallel compression conflict: if eq_low_mid_gain_db > 1.5,
-         cap parallel_wet to 0.10 to avoid low-mid mud buildup.
-      2. Total saturation mix budget: transformer_mix + triode_mix + tape_mix <= 1.2.
-         If exceeded, proportionally scale all three down.
-      3. Max 2 simultaneous heavy saturation stages: if 3 stages have mix > 0.3,
-         force the weakest one to 0.0.
+    Reads `param_guardrails.constraints` from analysis_data.  Each constraint
+    is a dict with:
+      - param_name: the DSP parameter to constrain
+      - constraint_type: "max", "min", or "force"
+      - value: the numeric limit
+
+    These constraints are AI-generated based on measured signal characteristics,
+    not hardcoded formulas.
     """
+    if not analysis_data:
+        return params
+
+    guardrails = analysis_data.get("param_guardrails")
+    if not guardrails:
+        return params
+
+    constraints = guardrails.get("constraints", [])
+    if not constraints:
+        return params
+
     p = dict(params)  # shallow copy
 
-    # Rule 1: Low-mid EQ boost conflicts with parallel saturation
-    low_mid = p.get("eq_low_mid_gain_db", 0)
-    if low_mid > 1.5:
-        current_pw = p.get("parallel_wet", 0)
-        if current_pw > 0.10:
-            logger.info(
-                f"Guardrail: eq_low_mid_gain_db={low_mid:.1f} > 1.5 → "
-                f"parallel_wet clamped {current_pw:.2f} → 0.10"
-            )
-            p["parallel_wet"] = 0.10
+    max_constraints: dict[str, float] = {}
+    min_constraints: dict[str, float] = {}
+    force_constraints: dict[str, float] = {}
 
-    # Rule 2: Total saturation mix budget
-    mix_keys = ["transformer_mix", "triode_mix", "tape_mix"]
-    total_mix = sum(p.get(k, 0) for k in mix_keys)
-    if total_mix > 1.2:
-        scale = 1.2 / total_mix
-        for k in mix_keys:
-            old = p.get(k, 0)
-            p[k] = round(old * scale, 4)
-        logger.info(
-            f"Guardrail: total saturation mix {total_mix:.2f} > 1.2 → "
-            f"scaled by {scale:.2f}"
-        )
+    for c in constraints:
+        name = c.get("param_name", "")
+        ctype = c.get("constraint_type", "")
+        val = c.get("value")
+        if not name or val is None or not isinstance(val, (int, float)):
+            continue
+        if ctype == "max":
+            if name not in max_constraints or val < max_constraints[name]:
+                max_constraints[name] = val
+        elif ctype == "min":
+            if name not in min_constraints or val > min_constraints[name]:
+                min_constraints[name] = val
+        elif ctype == "force":
+            force_constraints[name] = val
 
-    # Rule 3: Max 2 simultaneous heavy saturation stages
-    heavy = [(k, p.get(k, 0)) for k in mix_keys if p.get(k, 0) > 0.3]
-    if len(heavy) > 2:
-        # Sort by value ascending, force the weakest to 0
-        heavy.sort(key=lambda x: x[1])
-        weakest_key = heavy[0][0]
-        logger.info(
-            f"Guardrail: {len(heavy)} heavy saturation stages → "
-            f"disabling weakest: {weakest_key}={p[weakest_key]:.2f}"
-        )
-        p[weakest_key] = 0.0
-        # Also zero out the corresponding saturation param
-        sat_key = weakest_key.replace("_mix", "_saturation")
-        if weakest_key == "triode_mix":
-            sat_key = "triode_drive"
-        if sat_key in p:
-            p[sat_key] = 0.0
+    # Apply force constraints
+    for param, val in force_constraints.items():
+        if param in p or param in PARAMETER_SCHEMA:
+            old = p.get(param)
+            p[param] = val
+            if old != val:
+                logger.info(f"Guardrail[force]: {param} = {val} (was {old})")
 
-    # Apply guardrails to section_overrides too
+    # Apply max constraints
+    for param, max_val in max_constraints.items():
+        if param in p:
+            old = p[param]
+            if isinstance(old, (int, float)) and old > max_val:
+                p[param] = round(max_val, 4)
+                logger.info(f"Guardrail[max]: {param} clamped {old} → {max_val}")
+
+    # Apply min constraints
+    for param, min_val in min_constraints.items():
+        if param in p:
+            old = p[param]
+            if isinstance(old, (int, float)) and old < min_val:
+                p[param] = round(min_val, 4)
+                logger.info(f"Guardrail[min]: {param} clamped {old} → {min_val}")
+
+    # Apply to section_overrides
     overrides = p.get("section_overrides", [])
     if overrides:
         cleaned = []
         for ovr in overrides:
             ovr_copy = dict(ovr)
-            # Rule 1 for overrides
-            ovr_low_mid = ovr_copy.get("eq_low_mid_gain_db", low_mid)
-            if ovr_low_mid > 1.5:
-                ovr_pw = ovr_copy.get("parallel_wet")
-                if ovr_pw is not None and ovr_pw > 0.10:
-                    ovr_copy["parallel_wet"] = 0.10
-            # Rule 2 for overrides
-            ovr_total = sum(ovr_copy.get(k, p.get(k, 0)) for k in mix_keys)
-            if ovr_total > 1.2:
-                scale = 1.2 / ovr_total
-                for k in mix_keys:
-                    if k in ovr_copy:
-                        ovr_copy[k] = round(ovr_copy[k] * scale, 4)
+            for param, max_val in max_constraints.items():
+                if param in ovr_copy and isinstance(ovr_copy[param], (int, float)):
+                    if ovr_copy[param] > max_val:
+                        ovr_copy[param] = round(max_val, 4)
+            for param, min_val in min_constraints.items():
+                if param in ovr_copy and isinstance(ovr_copy[param], (int, float)):
+                    if ovr_copy[param] < min_val:
+                        ovr_copy[param] = round(min_val, 4)
+            for param, val in force_constraints.items():
+                ovr_copy[param] = val
             cleaned.append(ovr_copy)
         p["section_overrides"] = cleaned
 
