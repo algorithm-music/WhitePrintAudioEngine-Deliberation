@@ -150,50 +150,50 @@ IMPORTANT: You MUST actively use "section_overrides" to create emotional movemen
 # Parameter Schema (tool definition)
 # ──────────────────────────────────────────
 PARAMETER_SCHEMA = {
-    # ── v1 Parameters (Broadband & Dynamics) ──
-    # Input gain: -6dB limits headroom loss before processing, +12dB allows recovering quiet bedroom mixes without clipping the entry stage.
+    # ── Input ──
     "input_gain_db": {"min": -6, "max": 12, "default": 0},
-    # Broad EQ bands: ±6dB max. Mastering shouldn't require beyond 6dB of broadband EQ. If more is needed, the mix itself is fatally flawed.
+    # ── EQ Gains ──
     "eq_low_shelf_gain_db": {"min": -6, "max": 6, "default": 0},
-    # Low-mid EQ: ±6dB hardware range. Audition's param_constraints will tighten this dynamically when mud_risk is detected.
     "eq_low_mid_gain_db": {"min": -6, "max": 6, "default": 0},
     "eq_high_mid_gain_db": {"min": -6, "max": 6, "default": 0},
     "eq_high_shelf_gain_db": {"min": -6, "max": 6, "default": 0},
-    # Mid/Side gain: ±3dB max. Radical M/S changes (>3dB) destroy phase correlation and collapse mono compatibility.
+    # ── EQ Frequencies (AI must decide per-track) ──
+    "eq_low_shelf_freq": {"min": 30, "max": 200, "default": 80},
+    "eq_low_mid_freq": {"min": 100, "max": 1000, "default": 300},
+    "eq_low_mid_q": {"min": 0.3, "max": 5.0, "default": 1.0},
+    "eq_high_mid_freq": {"min": 1000, "max": 8000, "default": 3000},
+    "eq_high_mid_q": {"min": 0.3, "max": 5.0, "default": 1.2},
+    "eq_high_shelf_freq": {"min": 5000, "max": 18000, "default": 10000},
+    # ── M/S ──
     "ms_side_high_gain_db": {"min": -3, "max": 3, "default": 0},
     "ms_mid_low_gain_db": {"min": -3, "max": 3, "default": 0},
-    # Compressor thresholds: -24dB max depth ensures we don't compress the noise floor. -6dB minimum allows catching just the stray peaks.
-    "comp_threshold_db": {"min": -24, "max": -6, "default": -12},
-    # Compressor ratio: 6:1 max keeps it as a bus compressor (not a limiter). 1.5:1 min ensures it functions as intended "glue".
-    "comp_ratio": {"min": 1.5, "max": 6, "default": 2.5},
-    # Attack: 1ms min (fast enough for transients without distortion), 100ms max (slow enough to let EDM kicks punch through).
+    # ── Compressor (default = bypass: threshold 0, ratio 1:1) ──
+    "comp_threshold_db": {"min": -24, "max": 0, "default": 0},
+    "comp_ratio": {"min": 1.0, "max": 6, "default": 1.0},
     "comp_attack_sec": {"min": 0.001, "max": 0.1, "default": 0.01},
-    # Release: 50ms min (prevents low-frequency distortion/pumping), 500ms max (smooth leveling without "swallowing" the next downbeat).
     "comp_release_sec": {"min": 0.05, "max": 0.5, "default": 0.15},
-    # True Peak Limiter Ceiling: -0.1dBTP minimum safety margin (ITU-R BS.1770), -0.3dBTP is safer for lossy codec transcoding (Spotify/Apple).
+    "comp_makeup_db": {"min": 0, "max": 12, "default": 0},
+    # ── Limiter ──
     "limiter_ceil_db": {"min": -0.3, "max": -0.1, "default": -0.1},
-    # ── v2 Parameters (Analog Modeling & Spatial) ──
-    # Transformer magnetic saturation: full DSP range. Audition will constrain dynamically based on true_peak/crest measurements.
+    "limiter_release_ms": {"min": 10, "max": 200, "default": 50},
+    # ── Saturation (default = bypass: 0.0) ──
     "transformer_saturation": {"min": 0, "max": 1.0, "default": 0.0},
     "transformer_mix": {"min": 0, "max": 1.0, "default": 0.0},
-    # Vacuum tube triode stage: full DSP range.
     "triode_drive": {"min": 0, "max": 1.0, "default": 0.0},
-    # Triode grid bias: -2.0V operates in the warm linear region, 0.0V pushes grid-current limiting.
-    "triode_bias": {"min": -2.0, "max": 0.0, "default": -1.2},
+    "triode_bias": {"min": -2.0, "max": 0.0, "default": 0.0},
     "triode_mix": {"min": 0, "max": 1.0, "default": 0.0},
-    # Tape saturation model: full DSP range.
     "tape_saturation": {"min": 0, "max": 1.0, "default": 0.0},
     "tape_mix": {"min": 0, "max": 1.0, "default": 0.0},
-    # Dynamic EQ switch: 0 (Off) or 1 (On). Used to automatically tame harsh resonances.
+    "tape_speed": {"min": 7.5, "max": 30.0, "default": 15.0},
+    # ── Dynamic EQ ──
     "dyn_eq_enabled": {"min": 0, "max": 1, "default": 0},
-    # Low-end monoization (Elliptical EQ below 200Hz): >0.8 ensures club subwoofer compatibility, 1.0 is full mono. Min 0 allows complete bypass.
-    # Default 0.8: mono-ize low-end by default for streaming/club compatibility.
-    "stereo_low_mono": {"min": 0, "max": 1.0, "default": 0.8},
-    # Width processing: 1.5 max for high bands (Haas shimmer limit), 1.3 max for global width (avoids mono-canceling phase issues).
-    "stereo_high_wide": {"min": 0.8, "max": 1.5, "default": 1.15},
+    # ── Stereo (default = no processing: mono=0, wide=1.0, width=1.0) ──
+    "stereo_low_mono": {"min": 0, "max": 1.0, "default": 0.0},
+    "stereo_high_wide": {"min": 0.8, "max": 1.5, "default": 1.0},
     "stereo_width": {"min": 0.8, "max": 1.3, "default": 1.0},
-    # Parallel saturation mix: full DSP range. Audition will constrain based on mud_risk/crest measurements.
+    # ── Parallel ──
     "parallel_wet": {"min": 0, "max": 0.5, "default": 0.0},
+    "parallel_drive": {"min": 0, "max": 5.0, "default": 0.0},
 }
 
 
@@ -1091,14 +1091,22 @@ def _calculate_deliberation_score(opinions: Sequence[dict]) -> dict:
             "comp_ratio",
             "comp_attack_sec",
             "comp_release_sec",
+            "comp_makeup_db",
             "limiter_ceil_db",
+            "limiter_release_ms",
             "input_gain_db",
         ],
         "tone": [
             "eq_low_shelf_gain_db",
+            "eq_low_shelf_freq",
             "eq_low_mid_gain_db",
+            "eq_low_mid_freq",
+            "eq_low_mid_q",
             "eq_high_mid_gain_db",
+            "eq_high_mid_freq",
+            "eq_high_mid_q",
             "eq_high_shelf_gain_db",
+            "eq_high_shelf_freq",
             "dyn_eq_enabled",
         ],
         "stereo": [
@@ -1116,7 +1124,9 @@ def _calculate_deliberation_score(opinions: Sequence[dict]) -> dict:
             "triode_mix",
             "tape_saturation",
             "tape_mix",
+            "tape_speed",
             "parallel_wet",
+            "parallel_drive",
         ],
     }
 
