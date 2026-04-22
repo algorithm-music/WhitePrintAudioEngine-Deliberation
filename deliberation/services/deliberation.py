@@ -325,6 +325,7 @@ def _build_analysis_prompt(
     whole = analysis_data.get("whole_track_metrics", {})
     envs = analysis_data.get("time_series_circuit_envelopes", {})
     problems_legacy = analysis_data.get("detected_problems", [])
+    guardrails = analysis_data.get("param_guardrails")
 
     if formplan:
         # New v2 format: use formplan for richer context
@@ -361,6 +362,9 @@ def _build_analysis_prompt(
 ### Time-Series Envelopes
 {json.dumps(envs, indent=2)}
 
+### Parameter Guardrails (AI-generated from signal analysis)
+{json.dumps(guardrails, indent=2) if guardrails else "None — no constraints detected."}
+
 ---
 
 Based on this formplan, propose optimal RENDITION_DSP parameters.
@@ -384,7 +388,7 @@ v2 RENDITION_DSP parameters:
 - stereo_width (0.8-1.3): Global stereo width multiplier
 - parallel_wet (0-0.5): Parallel saturation wet amount
 
-**CRITICAL**: The `Detected Problems` section contains `param_constraints` derived from the actual signal measurements. You MUST respect these constraints. They override the ranges above.
+**CRITICAL**: The `Parameter Guardrails` section contains constraints derived from the actual signal measurements by the upstream analysis AI. You MUST respect these constraints. They override the ranges above.
 
 Also include all v1 parameters (input_gain_db through limiter_ceil_db).
 
@@ -425,6 +429,9 @@ Keep ALL parameters within these ranges:
 ### Sections
 {json.dumps(analysis_data.get('raw_sections', analysis_data.get('physical_sections', []))[:8], indent=2)}
 
+### Parameter Guardrails (AI-generated from signal analysis)
+{json.dumps(guardrails, indent=2) if guardrails else "None — no constraints detected."}
+
 ---
 
 Based on this analysis, propose optimal mastering parameters.
@@ -447,7 +454,7 @@ v2 RENDITION_DSP parameters:
 - stereo_width (0.8-1.3): Global stereo width multiplier
 - parallel_wet (0-0.5): Parallel saturation wet amount
 
-**CRITICAL**: The `Detected Problems` section contains `param_constraints` derived from the actual signal measurements. You MUST respect these constraints. They override the ranges above.
+**CRITICAL**: The `Parameter Guardrails` section contains constraints derived from the actual signal measurements by the upstream analysis AI. You MUST respect these constraints. They override the ranges above.
 
 Also include all v1 parameters (input_gain_db through limiter_ceil_db).
 
