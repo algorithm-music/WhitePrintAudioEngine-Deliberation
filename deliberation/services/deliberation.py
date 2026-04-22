@@ -110,6 +110,8 @@ You represent the [PHYSICAL AXIS] in the "Physics × Structure × Aesthetics" tr
 Your domain is physical limits, strict adherence to ITU-R BS.1770-4 standards, and true peak safety.
 While you respect the aesthetic vision, your absolute priority is ensuring the signal does not distort or violate broadcast standards.
 
+**DOMAIN**: You are a specialist in DANCE MUSIC mastering (EDM, House, Techno, DnB, Trance, Bass Music, and all electronic subgenres). All your decisions must be optimized for club sound systems, festival PAs, and streaming platforms that serve dance music audiences. Prioritize sub-bass clarity, kick transient preservation, and loudness competitive with top-tier dance labels (Anjunabeats, mau5trap, Monstercat, Drumcode, Hospital Records, RAM Records).
+
 IMPORTANT: Your "rationale" MUST be a detailed technical analysis. Explicitly frame your reasoning as providing the "Physical foundation" that safely supports the song's "Structure" and "Aesthetics". Cite specific LUFS and True Peak metrics. Use "section_overrides" for loud sections to prevent clipping.""",
     },
     "logica": {
@@ -123,6 +125,8 @@ You represent the [STRUCTURAL AXIS] in the "Physics × Structure × Aesthetics" 
 Your domain is macro-form flow, resolving contradictions, and maintaining the song's dynamic narrative.
 You act as the vital mediator between Grammatica's strict physical limits and Rhetorica's wild aesthetic desires.
 
+**DOMAIN**: You are a specialist in DANCE MUSIC mastering (EDM, House, Techno, DnB, Trance, Bass Music, and all electronic subgenres). Structure your automation around dance music conventions: build-ups need increasing energy, drops need maximum impact with controlled transients, breakdowns should breathe. Understand that dance tracks live and die by their drop dynamics and bass-to-kick relationship.
+
 IMPORTANT: You MUST actively use "section_overrides" to write dynamic automation based on the "semantic_context". Explain your structural routing in a rationale. Explicitly state how you are balancing the "Physics" (loudness/clipping) against the "Aesthetics" (warmth/width) to create a perfect narrative flow.""",
     },
     "rhetorica": {
@@ -134,6 +138,8 @@ IMPORTANT: You MUST actively use "section_overrides" to write dynamic automation
         "system_prompt": """You are RHETORICA, the Form Analyst.
 You represent the [AESTHETIC AXIS] in the "Physics × Structure × Aesthetics" triad.
 Your domain is artistic beauty, emotional impact, and spatial immersion. You advocate for warmth, width, and human connection, pushing against overly mathematical processing.
+
+**DOMAIN**: You are a specialist in DANCE MUSIC mastering (EDM, House, Techno, DnB, Trance, Bass Music, and all electronic subgenres). Your aesthetic vision must serve the dancefloor. Wide stereo fields that envelop the listener, analog warmth that makes synths feel alive, sub-bass that vibrates the chest. Think about how this track will FEEL at 3 AM in a dark club with a world-class sound system. Every parameter choice should serve that visceral experience.
 
 IMPORTANT: You MUST actively use "section_overrides" to create emotional movement (e.g., widening the chorus, saturating the bass). Detail your artistic vision in a poetic but precise rationale. Explicitly state how you are breathing "Aesthetic life" into Grammatica's cold "Physics" and Logica's calculated "Structure".""",
     },
@@ -334,12 +340,14 @@ def _build_analysis_prompt(
         strategy = formplan.get("global_mastering_strategy", {})
         sections = formplan.get("macro_form", {}).get("sections", [])
 
-        return f"""## Formplan-Guided RENDITION_DSP Parameter Selection
+        return f"""## Formplan-Guided RENDITION_DSP Parameter Selection (DANCE MUSIC SPECIALIST)
+
+### Domain
+This is a **DANCE MUSIC** mastering session. All tracks are electronic dance music (EDM, House, Techno, DnB, Trance, Bass Music, or related subgenres). Optimize for club sound systems, festival PAs, and streaming platforms.
 
 ### Target
 - Platform: {platform}
-- Target LUFS: {target_lufs}
-- Target True Peak: {target_true_peak} dBTP
+- **YOU MUST DECIDE the optimal target LUFS and target True Peak for this specific track.** Include `"recommended_target_lufs"` (float) and `"recommended_target_true_peak"` (float, in dBTP) in your JSON response. Base your decision on the track's genre, dynamics, and energy level. Do NOT default to -14.0 LUFS blindly — consider what is optimal for THIS track on THIS platform in the context of competitive dance music mastering.
 
 ### Track Identity
 {json.dumps(track_id, indent=2)}
@@ -367,6 +375,9 @@ def _build_analysis_prompt(
 
 ---
 
+### MASTERING PHILOSOPHY
+**Push to the absolute limit.** For every parameter, consider its full min-to-max range and find the OPTIMAL POINT just before it breaks — the sweet spot right at the edge of distortion, where the track sounds its most powerful, punchy, and alive WITHOUT crossing into audible degradation. Do NOT play it safe with conservative defaults. The goal is the MAXIMUM ACHIEVABLE QUALITY for this specific track, not a generic middle-ground. If the signal can handle more saturation, push it. If the limiter can go harder without audible pumping, push it. Every parameter should be justified as "this is the highest I can go before it degrades."
+
 Based on this formplan, propose optimal RENDITION_DSP parameters.
 The formplan targets tell you WHAT to achieve. You decide HOW via RENDITION_DSP params.
 
@@ -393,6 +404,8 @@ v2 RENDITION_DSP parameters:
 Also include all v1 parameters (input_gain_db through limiter_ceil_db).
 
 Additionally include:
+- **\"recommended_target_lufs\"** (float, REQUIRED): Your recommended integrated loudness target for this specific track (e.g. -9.0 to -16.0). YOU MUST include this.
+- **\"recommended_target_true_peak\"** (float, dBTP, REQUIRED): Your recommended true peak ceiling for this specific track (e.g. -0.1 to -1.0). YOU MUST include this.
 - A "deliberation_minutes" string (minimum 400 characters) containing the detailed meeting minutes (議事録) and step-by-step reasoning for the chosen parameters. YOU MUST OUTPUT THIS.
 - A "rationale" string (minimum 200 characters) summarizing your reasoning.
 - A "confidence" float (0-1) indicating your certainty
@@ -407,12 +420,14 @@ Keep ALL parameters within these ranges:
 """
 
     # Legacy v1 format fallback
-    return f"""## Audio Analysis Report
+    return f"""## Audio Analysis Report (DANCE MUSIC SPECIALIST)
+
+### Domain
+This is a **DANCE MUSIC** mastering session. All tracks are electronic dance music (EDM, House, Techno, DnB, Trance, Bass Music, or related subgenres). Optimize for club sound systems, festival PAs, and streaming platforms.
 
 ### Target
 - Platform: {platform}
-- Target LUFS: {target_lufs}
-- Target True Peak: {target_true_peak} dBTP
+- **YOU MUST DECIDE the optimal target LUFS and target True Peak for this specific track.** Include `"recommended_target_lufs"` (float) and `"recommended_target_true_peak"` (float, in dBTP) in your JSON response. Base your decision on the track's genre, dynamics, and energy level.
 
 ### Track Identity
 {json.dumps(track_id, indent=2)}
@@ -433,6 +448,9 @@ Keep ALL parameters within these ranges:
 {json.dumps(guardrails, indent=2) if guardrails else "None — no constraints detected."}
 
 ---
+
+### MASTERING PHILOSOPHY
+**Push to the absolute limit.** For every parameter, consider its full min-to-max range and find the OPTIMAL POINT just before it breaks — the sweet spot right at the edge of distortion, where the track sounds its most powerful, punchy, and alive WITHOUT crossing into audible degradation. Do NOT play it safe with conservative defaults. The goal is the MAXIMUM ACHIEVABLE QUALITY for this specific track, not a generic middle-ground.
 
 Based on this analysis, propose optimal mastering parameters.
 
@@ -459,6 +477,8 @@ v2 RENDITION_DSP parameters:
 Also include all v1 parameters (input_gain_db through limiter_ceil_db).
 
 Additionally include:
+- **"recommended_target_lufs"** (float, REQUIRED): Your recommended integrated loudness target for this specific track (e.g. -9.0 to -16.0). YOU MUST include this.
+- **"recommended_target_true_peak"** (float, dBTP, REQUIRED): Your recommended true peak ceiling for this specific track (e.g. -0.1 to -1.0). YOU MUST include this.
 - A "deliberation_minutes" string (minimum 400 characters) containing the detailed meeting minutes (議事録) and step-by-step reasoning for the chosen parameters. YOU MUST OUTPUT THIS.
 - A "rationale" string (minimum 200 characters) summarizing your reasoning.
 - A "confidence" float (0-1) indicating your certainty
@@ -674,6 +694,9 @@ async def _query_agent(agent_key: str, persona: dict, prompt: str) -> dict:
                     ),
                     "rationale": params.get("rationale", f"Agent {agent_key} analysis"),
                     "section_overrides": params.get("section_overrides", []),
+                    # AI-recommended target values (pass-through for downstream merge)
+                    "recommended_target_lufs": params.get("recommended_target_lufs"),
+                    "recommended_target_true_peak": params.get("recommended_target_true_peak"),
                     "errors": errors,
                     "token_usage": token_usage,
                 }
@@ -927,6 +950,33 @@ def _weighted_median_merge(opinions: Sequence[dict], analysis_data: dict = None)
         )
     )
     adopted["section_overrides"] = final_overrides
+
+    # 3. Merge AI-recommended target LUFS / true peak (weighted median across sages)
+    for target_key in ("recommended_target_lufs", "recommended_target_true_peak"):
+        t_values = []
+        t_weights = []
+        for op in opinions:
+            v = op.get(target_key)
+            if v is not None:
+                try:
+                    t_values.append(float(v))
+                    conf = float(op.get("confidence", 0.5))
+                    t_weights.append(conf)
+                except (ValueError, TypeError):
+                    pass
+        if t_values:
+            total_w = sum(t_weights) + 1e-6
+            pairs = sorted(zip(t_values, t_weights), key=lambda x: x[0])
+            cumul = 0.0
+            median_val = pairs[-1][0]
+            for val, w in pairs:
+                cumul += w
+                if cumul >= total_w / 2:
+                    median_val = val
+                    break
+            adopted[target_key] = round(median_val, 1)
+
+
 
     # Apply signal-measured constraints from Audition's detected_problems
     adopted = _apply_measured_constraints(adopted, analysis_data)
