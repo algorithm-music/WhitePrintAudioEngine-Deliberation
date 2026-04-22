@@ -184,7 +184,8 @@ PARAMETER_SCHEMA = {
     # Dynamic EQ switch: 0 (Off) or 1 (On). Used to automatically tame harsh resonances.
     "dyn_eq_enabled": {"min": 0, "max": 1, "default": 0},
     # Low-end monoization (Elliptical EQ below 200Hz): >0.8 ensures club subwoofer compatibility, 1.0 is full mono. Min 0 allows complete bypass.
-    "stereo_low_mono": {"min": 0, "max": 1.0, "default": 0.0},
+    # Default 0.8: mono-ize low-end by default for streaming/club compatibility.
+    "stereo_low_mono": {"min": 0, "max": 1.0, "default": 0.8},
     # Width processing: 1.5 max for high bands (Haas shimmer limit), 1.3 max for global width (avoids mono-canceling phase issues).
     "stereo_high_wide": {"min": 0.8, "max": 1.5, "default": 1.15},
     "stereo_width": {"min": 0.8, "max": 1.3, "default": 1.0},
