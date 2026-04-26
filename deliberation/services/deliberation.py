@@ -502,9 +502,29 @@ def _clamp_to_schema(params: dict) -> dict:
             adopted[key] = schema["default"]
 
     # Pass through non-schema fields
-    for key in ("section_overrides", "recommended_target_lufs", "recommended_target_true_peak"):
+    for key in ("recommended_target_lufs", "recommended_target_true_peak"):
         if key in params:
             adopted[key] = params[key]
+
+    # Defensive: normalize section_overrides
+    raw_overrides = params.get("section_overrides", [])
+    if isinstance(raw_overrides, str):
+        try:
+            raw_overrides = json.loads(raw_overrides)
+        except (json.JSONDecodeError, TypeError):
+            raw_overrides = []
+    if not isinstance(raw_overrides, list):
+        raw_overrides = []
+    clean_overrides = []
+    for ovr in raw_overrides:
+        if isinstance(ovr, str):
+            try:
+                ovr = json.loads(ovr)
+            except (json.JSONDecodeError, TypeError):
+                continue
+        if isinstance(ovr, dict):
+            clean_overrides.append(ovr)
+    adopted["section_overrides"] = clean_overrides
 
     return adopted
 
@@ -1300,9 +1320,21 @@ def _apply_measured_constraints(params: dict, analysis_data: dict) -> dict:
 
     # Apply to section_overrides
     overrides = p.get("section_overrides", [])
+    if isinstance(overrides, str):
+        try:
+            overrides = json.loads(overrides)
+        except (json.JSONDecodeError, TypeError):
+            overrides = []
     if overrides:
         cleaned = []
         for ovr in overrides:
+            if isinstance(ovr, str):
+                try:
+                    ovr = json.loads(ovr)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            if not isinstance(ovr, dict):
+                continue
             ovr_copy = dict(ovr)
             for param, max_val in max_constraints.items():
                 if param in ovr_copy and isinstance(ovr_copy[param], (int, float)):
