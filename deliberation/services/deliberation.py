@@ -92,7 +92,7 @@ def _get_anthropic_client(key_index: int = 0):
 def _get_google_client(key_index: int = 0) -> genai.Client:
     if key_index < len(_google_keys):
         return genai.Client(api_key=_google_keys[key_index])
-    return genai.Client(project=GCP_PROJECT_ID, location=GCP_LOCATION)
+    return genai.Client(vertexai=True, project=GCP_PROJECT_ID, location=GCP_LOCATION)
 
 
 # ──────────────────────────────────────────
@@ -205,117 +205,308 @@ async def run_triadic_deliberation(
     sage_config: Optional[dict] = None,
 ) -> dict:
     """
-    Run 3-agent independent assessment and return adopted parameters.
+    4-Step Sequential Pipeline:
+      Step 1: Vertex AI produces numbers (already done by Audition upstream)
+      Step 2: Claude creates DSP recipe from analysis
+      Step 3: ChatGPT + Vertex review/critique the recipe
+      Step 4: Claude applies corrections and finalizes
 
-    Flow:
-      1. Send analysis to all 3 agents in parallel (no multi-turn debate)
-      2. Each agent proposes parameters independently
-      3. Weighted median merge selects optimal combination
-      4. Return deliberation result
+    Returns adopted_params ready for Rendition-DSP.
     """
-    # Build the analysis prompt
+    # Defensive: ensure analysis_data is a dict
+    if isinstance(analysis_data, str):
+        try:
+            analysis_data = json.loads(analysis_data)
+        except (json.JSONDecodeError, TypeError):
+            logger.error("analysis_data is a non-parseable string, using empty dict")
+            analysis_data = {}
+    if not isinstance(analysis_data, dict):
+        logger.error(f"analysis_data is {type(analysis_data).__name__}, coercing to empty dict")
+        analysis_data = {}
+
+    start_time = time.time()
+    all_errors = []
+    total_tokens = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    step_results = {}
+
+    # Build analysis context prompt (shared across steps)
     analysis_prompt = _build_analysis_prompt(
         analysis_data, target_platform, target_lufs, target_true_peak
     )
 
-    # Custom Persona Injection or Plugin Selection
-    active_sages = SAGES  # Default: TRIVIUM 3-Sage
+    # ── STEP 2: Claude creates DSP recipe ──
+    logger.info("=== STEP 2: Claude — DSPレシピ作成 ===")
+    claude_model = os.environ.get("RECIPE_CLAUDE_MODEL", "claude-opus-4-7")
+    claude_fallback = os.environ.get("RECIPE_CLAUDE_FALLBACK", "claude-opus-4-7")
 
-    if sage_config:
-        custom_personas = sage_config.get("custom_personas")
-        if custom_personas and isinstance(custom_personas, dict):
-            # Bring Your Own Model (BYOM) Mode
-            active_sages = custom_personas
-        else:
-            # Pre-built Persona Configurations
-            plugin = sage_config.get("deliberation_archetype", "trivium")
-            if plugin == "12_agents_jp":
-                active_sages = _get_12_agents_personas()
-            elif plugin == "time_series_evaluator":
-                active_sages = _get_ts_envelope_personas()
-
-    # Query all sages in parallel (independent assessment — no debate)
-
-    start_time = time.time()
-
-    tasks = [
-        _query_agent(sage_key, sage, analysis_prompt)
-        for sage_key, sage in active_sages.items()
-    ]
-    opinions = await asyncio.gather(*tasks)
-
-    # Deterministic weighted median merge (replaces deprecated Nash product)
-    adopted = _weighted_median_merge(opinions, analysis_data)
-
-    # Deliberation score (Category-decomposed agreement level)
-    deliberation_scores = _calculate_deliberation_score(opinions)
-
-    # Trivium Synthesis Summary
-    dyn = int(deliberation_scores.get("dynamics", 0) * 100)
-    tone = int(deliberation_scores.get("tone", 0) * 100)
-    conflict = "Dynamic Range" if dyn < tone else "Tonal Balance"
-    global_pct = deliberation_scores.get("global", 0) * 100
-    trivium_summary = (
-        f"Synthesized [ Physics \u00d7 Structure \u00d7 Aesthetics ]. "
-        f"The Triad reached a consensus with {global_pct:.0f}% overall alignment. "
-        f"While perspectives initially conflicted over {conflict}, LOGICA successfully mediated "
-        f"GRAMMATICA's physical constraints and RHETORICA's aesthetic vision into a coherent master flow."
+    draft_text, draft_usage = await _call_with_fallback(
+        primary_provider="anthropic", primary_model=claude_model,
+        fallback_provider="anthropic", fallback_model=claude_fallback,
+        system_prompt=_STEP2_SYSTEM_PROMPT,
+        user_prompt=analysis_prompt + "\n\nRespond with a JSON object only.",
+        errors=all_errors, step_name="step2_claude_draft",
     )
+    _accumulate_tokens(total_tokens, draft_usage)
+
+    draft_parse = _robust_json_parse(draft_text)
+    draft_params = draft_parse["parsed"]
+    if not draft_params:
+        logger.error("Step 2 failed: Claude returned no usable params, using defaults")
+        draft_params = {k: v["default"] for k, v in PARAMETER_SCHEMA.items()}
+
+    step_results["step2_draft"] = {
+        "provider": "anthropic", "model": claude_model,
+        "parse_status": draft_parse["status"],
+        "param_count": len([k for k in draft_params if k in PARAMETER_SCHEMA]),
+    }
+    logger.info(f"Step 2 complete: {len(draft_params)} params in draft")
+
+    # ── STEP 3: ChatGPT + Vertex review in parallel ──
+    logger.info("=== STEP 3: ChatGPT + Vertex — ダメ出し ===")
+    review_prompt = _build_review_prompt(analysis_prompt, draft_params)
+
+    gpt_model = os.environ.get("REVIEW_GPT_MODEL", "gpt-4.1")
+    gpt_fallback = os.environ.get("REVIEW_GPT_FALLBACK", "gpt-4.1-mini")
+    vertex_model = os.environ.get("REVIEW_VERTEX_MODEL", "gemini-2.5-flash")
+    vertex_fallback = os.environ.get("REVIEW_VERTEX_FALLBACK", "gemini-2.5-flash")
+
+    review_tasks = [
+        _call_with_fallback(
+            "openai", gpt_model, "openai", gpt_fallback,
+            _STEP3_REVIEW_SYSTEM_PROMPT, review_prompt,
+            all_errors, "step3_chatgpt_review",
+        ),
+        _call_with_fallback(
+            "google", vertex_model, "google", vertex_fallback,
+            _STEP3_REVIEW_SYSTEM_PROMPT, review_prompt,
+            all_errors, "step3_vertex_review",
+        ),
+    ]
+    review_results = await asyncio.gather(*review_tasks, return_exceptions=True)
+
+    reviews = []
+    for i, res in enumerate(review_results):
+        reviewer = "chatgpt" if i == 0 else "vertex"
+        if isinstance(res, Exception):
+            logger.error(f"Step 3 {reviewer} failed: {res}")
+            reviews.append({"reviewer": reviewer, "issues": [], "error": str(res)})
+        else:
+            text, usage = res
+            _accumulate_tokens(total_tokens, usage)
+            parsed = _robust_json_parse(text)
+            review_data = parsed["parsed"] if isinstance(parsed["parsed"], dict) else {}
+            review_data["reviewer"] = reviewer
+            reviews.append(review_data)
+
+    step_results["step3_reviews"] = [
+        {"reviewer": r.get("reviewer"), "issue_count": len(r.get("issues", r.get("problems", [])))}
+        for r in reviews
+    ]
+    logger.info(f"Step 3 complete: {len(reviews)} reviews collected")
+
+    # ── STEP 4: Claude applies corrections ──
+    logger.info("=== STEP 4: Claude — 修正・最終化 ===")
+    fix_model = os.environ.get("FIX_CLAUDE_MODEL", "claude-opus-4-7")
+    fix_fallback = os.environ.get("FIX_CLAUDE_FALLBACK", "claude-opus-4-7")
+    fix_prompt = _build_fix_prompt(analysis_prompt, draft_params, reviews)
+
+    final_text, final_usage = await _call_with_fallback(
+        "anthropic", fix_model, "anthropic", fix_fallback,
+        _STEP4_FIX_SYSTEM_PROMPT,
+        fix_prompt + "\n\nRespond with a JSON object only.",
+        all_errors, "step4_claude_fix",
+    )
+    _accumulate_tokens(total_tokens, final_usage)
+
+    final_parse = _robust_json_parse(final_text)
+    final_params = final_parse["parsed"]
+    if not final_params:
+        logger.warning("Step 4 failed: using draft params from Step 2")
+        final_params = draft_params
+
+    # Clamp all params to schema bounds
+    adopted = _clamp_to_schema(final_params)
+
+    # Apply signal-measured constraints from Audition
+    adopted = _apply_measured_constraints(adopted, analysis_data)
 
     runtime_ms = int((time.time() - start_time) * 1000)
     query_hash = hashlib.sha256(analysis_prompt.encode()).hexdigest()
 
-    all_errors = []
-    total_tokens = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-
-    # Provider results mapping taking active sages into account with fallbacks/models
-    active_sage_info = {}
-    for k, v in active_sages.items():
-        active_sage_info[k] = {
-            "name": v.get("name", "Unknown"),
-            "provider": v.get("provider", "unknown"),
-            "primary_model": v.get("model", "unknown"),
-            "fallback_model": v.get("fallback_model", "none"),
-        }
-
-    for op in opinions:
-        if "errors" in op:
-            all_errors.extend(op.get("errors", []))
-        if "token_usage" in op:
-            u = op.get("token_usage", {})
-            total_tokens["prompt_tokens"] += u.get("prompt_tokens", 0)
-            total_tokens["completion_tokens"] += u.get("completion_tokens", 0)
-            total_tokens["total_tokens"] += u.get("total_tokens", 0)
+    pipeline_summary = (
+        f"4-Step Sequential Pipeline completed in {runtime_ms}ms. "
+        f"Claude drafted {len(draft_params)} params → "
+        f"ChatGPT+Vertex reviewed with {sum(len(r.get('issues', r.get('problems', []))) for r in reviews)} issues → "
+        f"Claude finalized {len(adopted)} params."
+    )
 
     return {
         "run_id": str(uuid.uuid5(uuid.NAMESPACE_DNS, query_hash)),
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "trivium_summary": trivium_summary,
+        "trivium_summary": pipeline_summary,
         "query_hash": query_hash,
-        "analysis_version": "v2",
-        "schema_version": "1.0",
+        "analysis_version": "v3_4step",
+        "schema_version": "2.0",
         "sage_config": sage_config or {},
-        "active_sages": active_sage_info,
+        "pipeline_mode": "4step_sequential",
+        "step_results": step_results,
         "provider_results": {
-            op.get("agent_name", f"agent_{i}"): {
-                "provider": op.get("provider"),
-                "model": op.get("model"),
-                "parse_status": op.get("parse_status"),
-                "latency_ms": op.get("latency_ms"),
-            }
-            for i, op in enumerate(opinions)
+            "step2_claude": {"provider": "anthropic", "model": claude_model},
+            "step3_chatgpt": {"provider": "openai", "model": gpt_model},
+            "step3_vertex": {"provider": "google", "model": vertex_model},
+            "step4_claude": {"provider": "anthropic", "model": fix_model},
         },
-        "merge_strategy": "weighted_median_v2_validity_aware",
+        "merge_strategy": "4step_review_and_fix",
         "runtime_ms": runtime_ms,
         "token_usage": total_tokens,
         "errors": all_errors,
-        "opinions": opinions,
+        "draft_params": draft_params,
+        "reviews": reviews,
+        "opinions": [{"agent_name": "claude_final", "provider": "anthropic",
+                       "model": fix_model, **adopted,
+                       "confidence": float(final_params.get("confidence", 0.85)),
+                       "rationale": final_params.get("rationale", ""),
+                       "deliberation_minutes": final_params.get("deliberation_minutes", ""),
+                       "section_overrides": final_params.get("section_overrides", adopted.get("section_overrides", [])),
+                       }],
         "adopted_params": adopted,
-        "deliberation_score": deliberation_scores.get("global", 0.5),
-        "deliberation_score_detail": deliberation_scores,
+        "deliberation_score": float(final_params.get("confidence", 0.85)),
+        "deliberation_score_detail": {"global": float(final_params.get("confidence", 0.85))},
         "target_lufs": target_lufs,
         "target_true_peak": target_true_peak,
     }
+
+
+# ──────────────────────────────────────────
+# Step-specific system prompts
+# ──────────────────────────────────────────
+_STEP2_SYSTEM_PROMPT = """You are a world-class mastering engineer (Claude).
+Your job: Read the audio analysis data and CREATE a complete DSP recipe.
+You must output ALL DSP parameters as a JSON object.
+Be bold and creative — propose the BEST possible mastering for this specific track.
+Do NOT play it safe with defaults. Every parameter must reflect deep sonic analysis."""
+
+_STEP3_REVIEW_SYSTEM_PROMPT = """You are a critical audio mastering reviewer.
+Your job: Review the proposed DSP recipe against the audio analysis.
+Find problems, contradictions, and missed opportunities.
+Output a JSON object with:
+- "issues": list of {"param": "param_name", "problem": "description", "suggestion": "fix"}
+- "severity": "critical" | "warning" | "minor"
+- "overall_score": 0-100 (quality of the draft)
+- "summary": brief review summary
+Be HARSH and SPECIFIC. Point out every problem you see."""
+
+_STEP4_FIX_SYSTEM_PROMPT = """You are a world-class mastering engineer (Claude).
+Your job: Take the draft DSP recipe AND the reviewer feedback, then produce the FINAL corrected recipe.
+Address every critical and warning issue raised by the reviewers.
+Output the complete corrected JSON with ALL DSP parameters.
+Include "changes_made": list of what you fixed and why."""
+
+
+def _build_review_prompt(analysis_prompt: str, draft_params: dict) -> str:
+    """Build the review prompt for Step 3 (ChatGPT + Vertex)."""
+    return f"""{analysis_prompt}
+
+---
+
+## DRAFT DSP RECIPE (from Claude, Step 2)
+The following DSP parameters were proposed. Review them critically.
+
+```json
+{json.dumps(draft_params, indent=2, default=str)}
+```
+
+Review each parameter against the analysis data. Find:
+1. Parameters that contradict the analysis (e.g., boosting harsh frequencies)
+2. Parameters that are too conservative (missed opportunities)
+3. Parameters that conflict with each other
+4. Missing section_overrides for distinct sections
+5. Inappropriate target LUFS/True Peak for the genre
+
+Respond with JSON only."""
+
+
+def _build_fix_prompt(analysis_prompt: str, draft_params: dict, reviews: list) -> str:
+    """Build the fix prompt for Step 4 (Claude finalize)."""
+    reviews_text = json.dumps(reviews, indent=2, default=str)
+    return f"""{analysis_prompt}
+
+---
+
+## YOUR DRAFT (Step 2)
+```json
+{json.dumps(draft_params, indent=2, default=str)}
+```
+
+## REVIEWER FEEDBACK (Step 3 — ChatGPT + Vertex)
+```json
+{reviews_text}
+```
+
+Based on the reviewer feedback, produce the FINAL corrected DSP recipe.
+Address every critical and warning issue. Keep parameters that were approved.
+Include ALL parameters from the schema. Respond with JSON only."""
+
+
+async def _call_with_fallback(
+    primary_provider: str, primary_model: str,
+    fallback_provider: str, fallback_model: str,
+    system_prompt: str, user_prompt: str,
+    errors: list, step_name: str,
+) -> tuple[str, dict]:
+    """Call an LLM with fallback. Returns (text, token_usage)."""
+    attempts = [(primary_provider, primary_model)]
+    if fallback_model and fallback_model != primary_model:
+        attempts.append((fallback_provider, fallback_model))
+
+    for prov, model in attempts:
+        key_pool = _openai_keys if prov == "openai" else _anthropic_keys if prov == "anthropic" else _google_keys
+        for key_idx in range(max(1, len(key_pool))):
+            try:
+                if prov == "openai":
+                    return await _call_openai(model, system_prompt, user_prompt, key_idx)
+                elif prov == "anthropic":
+                    return await _call_anthropic(model, system_prompt, user_prompt, key_idx)
+                else:
+                    return await _call_google(model, system_prompt, user_prompt, key_idx)
+            except Exception as e:
+                errors.append({
+                    "step": step_name, "provider": prov, "model": model,
+                    "message": str(e), "severity": "warning",
+                })
+                logger.warning(f"[{step_name}] {prov}/{model} key[{key_idx}] failed: {e}")
+
+    errors.append({"step": step_name, "message": "All attempts failed", "severity": "error"})
+    return "{}", {}
+
+
+def _accumulate_tokens(total: dict, usage: dict):
+    """Add token usage to running total."""
+    for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        total[k] = total.get(k, 0) + usage.get(k, 0)
+
+
+def _clamp_to_schema(params: dict) -> dict:
+    """Clamp all parameters to PARAMETER_SCHEMA bounds."""
+    adopted = {}
+    for key, schema in PARAMETER_SCHEMA.items():
+        if key in params:
+            try:
+                val = float(params[key])
+                if math.isnan(val) or math.isinf(val):
+                    val = schema["default"]
+            except (ValueError, TypeError):
+                val = schema["default"]
+            adopted[key] = round(max(schema["min"], min(schema["max"], val)), 4)
+        else:
+            adopted[key] = schema["default"]
+
+    # Pass through non-schema fields
+    for key in ("section_overrides", "recommended_target_lufs", "recommended_target_true_peak"):
+        if key in params:
+            adopted[key] = params[key]
+
+    return adopted
 
 
 def _build_analysis_prompt(
@@ -799,7 +990,25 @@ async def _call_anthropic(
             if getattr(response, "usage", None)
             else {}
         )
-        return response.content[0].text, usage
+
+        # Defensive: AnthropicVertex rawPredict may return different content types
+        content = response.content
+        if not content:
+            return "", usage
+
+        first_block = content[0]
+        # Standard Anthropic SDK returns TextBlock objects with .text attribute
+        if hasattr(first_block, "text"):
+            text = first_block.text
+        elif isinstance(first_block, dict):
+            # AnthropicVertex rawPredict may return dicts
+            text = first_block.get("text", json.dumps(first_block))
+        elif isinstance(first_block, str):
+            text = first_block
+        else:
+            text = str(first_block)
+
+        return text or "", usage
 
     return await asyncio.to_thread(_sync_call)
 
@@ -870,6 +1079,20 @@ def _weighted_median_merge(opinions: Sequence[dict], analysis_data: dict = None)
     if not opinions:
         return {}
 
+    # Defensive: ensure analysis_data is a dict
+    if isinstance(analysis_data, str):
+        try:
+            analysis_data = json.loads(analysis_data)
+        except (json.JSONDecodeError, TypeError):
+            analysis_data = {}
+    if not isinstance(analysis_data, dict):
+        analysis_data = {}
+
+    # Defensive: filter out non-dict opinions
+    opinions = [op for op in opinions if isinstance(op, dict)]
+    if not opinions:
+        return {}
+
     for key, schema in PARAMETER_SCHEMA.items():
         min_v = schema["min"]
         max_v = schema["max"]
@@ -917,10 +1140,20 @@ def _weighted_median_merge(opinions: Sequence[dict], analysis_data: dict = None)
     override_votes: dict[str, dict[str, list[tuple[float, float]]]] = {}
 
     for op in opinions:
+        if not isinstance(op, dict):
+            continue
         weight = float(op.get("confidence", 0.5)) * max(
             0.25, float(op.get("valid_param_ratio", 1.0))
         )
-        for override in op.get("section_overrides", []):
+        overrides_raw = op.get("section_overrides", [])
+        if isinstance(overrides_raw, str):
+            try:
+                overrides_raw = json.loads(overrides_raw)
+            except (json.JSONDecodeError, TypeError):
+                overrides_raw = []
+        if not isinstance(overrides_raw, list):
+            overrides_raw = []
+        for override in overrides_raw:
             sec_id = override.get("section_id")
             if not sec_id:
                 continue

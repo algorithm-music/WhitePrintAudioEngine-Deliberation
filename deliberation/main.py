@@ -130,10 +130,12 @@ async def deliberate(req: DeliberateRequest) -> JSONResponse:
             sage_config=req.sage_config,
         )
     except Exception as e:
+        import traceback
         logger.error(f"Deliberation failed: {type(e).__name__}: {e}")
+        logger.error(f"Traceback:\n{traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
-            detail="Deliberation failed. Check server logs for details.",
+            detail=f"Deliberation failed: {type(e).__name__}: {e}",
         )
 
     return JSONResponse(content=result)
